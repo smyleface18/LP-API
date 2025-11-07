@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { GameQuestionsGatewayModule } from './game-questions-gateway/game-questions-gateway.module';
+import { QuestionModule } from './question/question.module';
+import { GameQuestionsModule } from './game-questions/game-questions.module';
+import { DatabaseModule } from './db/database.module';
 
 @Module({
-  imports: [GameQuestionsGatewayModule],
+  imports: [DatabaseModule, GameQuestionsModule, QuestionModule, GameQuestionsModule],
   controllers: [AppController],
   providers: [AppService],
 })
