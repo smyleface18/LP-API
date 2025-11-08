@@ -19,16 +19,16 @@ export class CategoryQuestionController {
 
   @Get(':id')
   findOne(@Param('id') id: string) {
-    return this.categoryQuestionService.findOne(+id);
+    return this.categoryQuestionService.findOne(id);
   }
 
   @Patch(':id')
   update(@Param('id') id: string, @Body() updateCategoryQuestionDto: UpdateCategoryQuestionDto) {
-    return this.categoryQuestionService.update(+id, updateCategoryQuestionDto);
+    return this.categoryQuestionService.update(id, updateCategoryQuestionDto);
   }
 
   @Delete(':id')
   remove(@Param('id') id: string) {
-    return this.categoryQuestionService.remove(+id);
+    return this.categoryQuestionService.remove(id);
   }
 }

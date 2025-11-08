@@ -1,12 +1,8 @@
 import { IsBoolean } from 'class-validator';
-import { BeforeInsert, Column, CreateDateColumn, PrimaryColumn, UpdateDateColumn } from 'typeorm';
-import { v7 } from 'uuid';
+import { Column, CreateDateColumn, PrimaryGeneratedColumn, UpdateDateColumn } from 'typeorm';
 
 export class CoreEntity {
-  @PrimaryColumn({
-    type: 'uuid',
-    //generated: 'uuid',
-  })
+  @PrimaryGeneratedColumn('uuid')
   id: string;
 
   @IsBoolean()
@@ -18,9 +14,4 @@ export class CoreEntity {
 
   @UpdateDateColumn({ nullable: true })
   updatedAt: Date;
-
-  @BeforeInsert()
-  protected beforeInsert() {
-    this.id = v7();
-  }
 }

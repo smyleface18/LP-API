@@ -20,7 +20,6 @@ export class AnswerInOptionsConstraint implements ValidatorConstraintInterface {
 
 export function IsAnswerInOptions(validationOptions?: ValidationOptions) {
   return function (object: object, propertyName: string) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
     registerDecorator({
       name: 'IsAnswerInOptions',
       target: object.constructor,

@@ -8,5 +8,6 @@ import { ENTITIES } from 'src/db/database.module';
   controllers: [QuestionController],
   providers: [QuestionService],
   imports: [TypeOrmModule.forFeature(Object.values(ENTITIES))],
+  exports: [QuestionService],
 })
 export class QuestionModule {}

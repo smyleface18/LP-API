@@ -12,6 +12,11 @@ export class QuestionController {
     return this.questionService.create(createQuestionDto);
   }
 
+  @Post('/bulk')
+  createMany(@Body() createQuestionDto: CreateQuestionDto[]) {
+    return this.questionService.createMany(createQuestionDto);
+  }
+
   @Get()
   findAll() {
     return this.questionService.findAll();

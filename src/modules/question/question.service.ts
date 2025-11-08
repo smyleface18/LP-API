@@ -28,11 +28,27 @@ export class QuestionService {
     });
   }
 
+  async createMany(createQuestionDtos: CreateQuestionDto[]) {
+    return await this.repo.save(createQuestionDtos);
+  }
+
   async update(id: string, updateQuestionDto: UpdateQuestionDto) {
     return await this.repo.update(id, updateQuestionDto);
   }
 
   async remove(id: string) {
     return await this.repo.delete(id);
+  }
+
+  async getRandomQuestions(limit: number = 10): Promise<Question[]> {
+    // Si estás usando TypeORM
+    const questions = await this.repo
+      .createQueryBuilder('question')
+      .orderBy('RANDOM()') // Para PostgreSQL
+      .limit(limit)
+      .getMany();
+
+    console.log(`${questions.length} preguntas seleccionadas aleatoriamente`);
+    return questions;
   }
 }

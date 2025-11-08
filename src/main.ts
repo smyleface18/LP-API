@@ -5,17 +5,24 @@ import { IoAdapter } from '@nestjs/platform-socket.io';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // ✅ Habilitar CORS para WebSockets
+  // CORS para HTTP
   app.enableCors({
-    origin: '*', // Solo desarrollo
+    origin: '*', // En producción, especifica dominios: ['http://localhost:3000', 'https://tuapp.com']
+    credentials: true,
   });
 
-  // ✅ Activar Socket.IO Adapter
+  // Socket.IO Adapter
   app.useWebSocketAdapter(new IoAdapter(app));
 
-  await app.listen(process.env.PORT ?? 3000);
-  console.log('🚀 API WebSocket corriendo en http://localhost:3000');
+  // Escuchar en todas las interfaces (0.0.0.0) para red local
+  const port = process.env.PORT ?? 3000;
+  await app.listen(port, '0.0.0.0');
+
+  console.log('🚀 API corriendo en:');
+  console.log(`   - Local: http://localhost:${port}`);
+  console.log(`   - Red:   http://[TU_IP]:${port}`);
 }
+
 bootstrap().catch((e) => {
-  console.error('api faild ❌', e);
+  console.error('❌ API falló:', e);
 });

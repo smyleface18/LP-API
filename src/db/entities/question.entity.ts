@@ -1,4 +1,4 @@
-import { ArrayNotEmpty, IsArray, IsNotEmpty, IsString } from 'class-validator';
+import { ArrayNotEmpty, IsArray, IsNotEmpty, IsOptional, IsString, IsUrl } from 'class-validator';
 import { CoreEntity } from './model.core';
 import { Column, Entity, JoinColumn, ManyToOne } from 'typeorm';
 import { IsAnswerInOptions } from 'src/common/decorators/validators/is-answer-in-options.validator';
@@ -6,10 +6,15 @@ import { CategoryQuestion } from './category-question.entity';
 
 @Entity()
 export class Question extends CoreEntity {
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  @Column()
-  question: string;
+  @Column({ nullable: true })
+  questionText?: string;
+
+  @IsOptional()
+  @IsUrl()
+  @Column({ nullable: true })
+  questionImage?: string;
 
   @IsArray()
   @ArrayNotEmpty()
