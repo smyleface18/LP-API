@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { CreateGameQuestionDto } from './dto/create-game-question.dto';
 import { UpdateGameQuestionDto } from './dto/update-game-question.dto';
 import { Question } from 'src/db/entities';
+import { DeepPartial } from 'typeorm';
 
 @Injectable()
 export class GameQuestionsService {
@@ -25,13 +26,13 @@ export class GameQuestionsService {
     return `This action removes a #${id} gameQuestion`;
   }
 
-  getRandomQuestion(): Question {
+  getRandomQuestion(): DeepPartial<Question> {
     const randomIndex = Math.floor(Math.random() * this.questions.length);
     console.log('Pregunta seleccionada:', randomIndex);
     return { ...this.questions[randomIndex] };
   }
 
-  questions: Question[] = [
+  questions: DeepPartial<Question>[] = [
     {
       question: '¿Cuál es la capital de Francia?',
       options: ['Madrid', 'París', 'Roma', 'Londres'],

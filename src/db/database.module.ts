@@ -3,6 +3,9 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
 import { EnvsService } from 'src/common/envs/envs.service';
 import { EnvsModule } from 'src/common/envs/envs.module';
+import * as entities from './entities';
+
+export const ENTITIES = Object.values(entities);
 
 @Module({
   imports: [
@@ -17,9 +20,9 @@ import { EnvsModule } from 'src/common/envs/envs.module';
         username: envs.dbUser,
         password: envs.dbPassword,
         database: envs.dbName,
-        entities: [__dirname + '/../entities/*.entity{.ts,.js}'],
+        entities: [__dirname + '/entities/*.entity{.ts,.js}'],
         synchronize: false, // ❌ No sincronizar automáticamente
-        migrations: [__dirname + '/../migrations/*{.ts,.js}'],
+        migrations: [__dirname + '/migrations/*{.ts,.js}'],
         migrationsRun: false, // ❌ No correr automáticamente
       }),
     }),
