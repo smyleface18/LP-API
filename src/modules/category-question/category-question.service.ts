@@ -16,15 +16,16 @@ export class CategoryQuestionService {
     return this.repo.save(createCategoryQuestionDto);
   }
 
-  findAll() {
-    return this.repo.find();
+  async findAll() {
+    return await this.repo.find({
+      relations: ['questions'],
+    });
   }
 
-  findOne(id: string) {
-    return this.repo.findOne({
-      where: {
-        id: id,
-      },
+  async findOne(id: string) {
+    return await this.repo.findOne({
+      where: { id },
+      relations: ['questions'],
     });
   }
 

@@ -17,14 +17,15 @@ export class QuestionService {
   }
 
   async findAll() {
-    return await this.repo.find();
+    return await this.repo.find({
+      relations: ['category'],
+    });
   }
 
   async findOne(id: string) {
     return await this.repo.findOne({
-      where: {
-        id: id,
-      },
+      where: { id },
+      relations: ['category'],
     });
   }
 
