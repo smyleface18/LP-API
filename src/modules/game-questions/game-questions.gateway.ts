@@ -3,7 +3,6 @@ import {
   SubscribeMessage,
   MessageBody,
   WebSocketServer,
-  OnGatewayInit,
   OnGatewayDisconnect,
   OnGatewayConnection,
   ConnectedSocket,
@@ -15,31 +14,25 @@ import { Question } from 'src/db/entities';
 
 @WebSocketGateway({
   namespace: '/game',
-  // ⬇️ AGREGAR ESTO
   cors: {
-    origin: '*', // Permite todas las conexiones (desarrollo)
+    origin: '*',
     credentials: true,
     methods: ['GET', 'POST'],
   },
-  // Opcional pero recomendado
   transports: ['websocket', 'polling'],
 })
 export class GameQuestionsGateway
-  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy
+  implements OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy
 {
   @WebSocketServer() server: Server;
 
-  private questions: Question[] = [];
-  private timeouts: NodeJS.Timeout[] = [];
   private connectedUsers = new Map<string, string>(); // socketId -> userId
+  private userGames = new Map<
+    string,
+    { questions: Question[]; currentIndex: number; timeout?: NodeJS.Timeout }
+  >();
 
   constructor(private readonly gameQuestionsService: GameQuestionsService) {}
-
-  async afterInit() {
-    console.log('WebSocket Gateway inicializado');
-    // Cargar preguntas al iniciar
-    this.questions = await this.gameQuestionsService.getQuestion();
-  }
 
   handleConnection(client: Socket) {
     console.log(`Cliente conectado: ${client.id}`);
@@ -47,61 +40,62 @@ export class GameQuestionsGateway
 
   handleDisconnect(client: Socket) {
     console.log(`Cliente desconectado: ${client.id}`);
+    const userId = this.connectedUsers.get(client.id);
+    if (userId) {
+      const userGame = this.userGames.get(userId);
+      if (userGame?.timeout) clearTimeout(userGame.timeout);
+      this.userGames.delete(userId);
+    }
     this.connectedUsers.delete(client.id);
   }
 
   @SubscribeMessage('joinGame')
   async handleJoinGame(@MessageBody() data: { userId: string }, @ConnectedSocket() client: Socket) {
     this.connectedUsers.set(client.id, data.userId);
-    await client.join(data.userId); // Esperar a que se una a la sala
-    console.log(`Usuario ${data.userId} unido al juego`);
+    await client.join(data.userId);
 
-    return { success: true, message: 'Unido al juego correctamente' };
-  }
+    const questions = await this.gameQuestionsService.getQuestions();
 
-  // Método para iniciar el juego manualmente
-  @SubscribeMessage('startGame')
-  async handleStartGame() {
-    await this.startGame();
-    return { success: true, message: 'Juego iniciado' };
-  }
-
-  private async startGame() {
-    // Limpiar timeouts anteriores si existen
-    this.clearTimeouts();
-
-    // Cargar preguntas frescas
-    this.questions = await this.gameQuestionsService.getQuestion();
-    console.log(`Iniciando juego con ${this.questions.length} preguntas`);
-
-    // Enviar preguntas
-    this.sendQuestions();
-  }
-
-  private sendQuestions() {
-    this.questions.forEach((question, index) => {
-      const timeout = setTimeout(() => {
-        this.server.emit('newQuestion', {
-          question,
-          questionNumber: index + 1,
-          totalQuestions: this.questions.length,
-          timeLimit: 5000, // 5 segundos para responder
-        });
-        console.log(`Pregunta ${index + 1} de ${this.questions.length} enviada`);
-
-        // Emitir fin de juego después de la última pregunta
-        if (index === this.questions.length - 1) {
-          setTimeout(() => {
-            this.server.emit('gameEnded', {
-              totalQuestions: this.questions.length,
-            });
-            console.log('Juego finalizado');
-          }, 5000); // Esperar 5 segundos después de la última pregunta
-        }
-      }, index * 5000); // 5 segundos entre preguntas (30 para responder + 5 de pausa)
-
-      this.timeouts.push(timeout);
+    this.userGames.set(data.userId, {
+      questions,
+      currentIndex: 0,
     });
+
+    console.log(`Usuario ${data.userId} unido al juego`);
+    this.sendNextQuestion(data.userId);
+
+    return { success: true };
+  }
+
+  /** Envia la siguiente pregunta o finaliza el juego */
+  private sendNextQuestion(userId: string) {
+    const userGame = this.userGames.get(userId);
+    if (!userGame) return;
+
+    // Si ya no hay más preguntas -> finalizar
+    if (userGame.currentIndex >= userGame.questions.length) {
+      this.server.to(userId).emit('gameEnded', { totalQuestions: userGame.currentIndex });
+      console.log(`Juego finalizado para ${userId}`);
+      return;
+    }
+
+    const question = userGame.questions[userGame.currentIndex];
+    console.log(`Enviando pregunta ${userGame.currentIndex + 1} a ${userId}`);
+
+    // Emitir pregunta
+    this.server.to(userId).emit('newQuestion', {
+      question,
+      questionNumber: userGame.currentIndex + 1,
+      totalQuestions: userGame.questions.length,
+      timeLimit: 5000,
+    });
+
+    // Crear timeout para pasar a la siguiente si no responde
+    userGame.timeout = setTimeout(() => {
+      console.log(`Tiempo agotado para ${userId} en la pregunta ${question.id}`);
+      userGame.currentIndex++;
+      this.sendNextQuestion(userId);
+    }, 5000);
   }
 
   @SubscribeMessage('answer')
@@ -109,53 +103,52 @@ export class GameQuestionsGateway
     @MessageBody() data: { questionId: string; userId: string; answer: string },
     @ConnectedSocket() client: Socket,
   ) {
-    console.log(`Respuesta recibida de usuario ${data.userId}`);
+    const userGame = this.userGames.get(data.userId);
+    if (!userGame) throw new Error('user game not found');
 
-    // Buscar la pregunta en el array cargado
-    const question: Question | undefined = this.questions.find((q) => q.id === data.questionId);
+    // Cancelar el timeout actual
+    if (userGame.timeout) clearTimeout(userGame.timeout);
 
-    if (!question) {
-      client.emit('answerResult', {
-        error: 'Pregunta no encontrada',
-        correct: false,
-      });
-      return;
-    }
-
+    const question = userGame.questions[userGame.currentIndex];
     const correct = question.correctAnswer === data.answer;
 
-    // Emitir resultado solo al usuario que respondió
-    // Usar el socketId del cliente que envió la respuesta
     client.emit('answerResult', {
       correct,
       correctAnswer: question.correctAnswer,
-      questionId: data.questionId,
+      questionId: question.id,
     });
 
     console.log(
       `Usuario ${data.userId} respondió ${correct ? 'correctamente' : 'incorrectamente'}`,
     );
 
+    // Pasar a la siguiente pregunta
+    setTimeout(() => {
+      userGame.currentIndex++;
+      this.sendNextQuestion(data.userId);
+    }, 1000);
+
     return { received: true };
   }
 
-  // Método para detener el juego
   @SubscribeMessage('stopGame')
-  handleStopGame() {
-    this.clearTimeouts();
-    this.server.emit('gameStopped');
-    console.log('Juego detenido manualmente');
+  handleStopGame(@ConnectedSocket() client: Socket) {
+    const userId = this.connectedUsers.get(client.id);
+    if (!userId) return;
 
-    return { success: true, message: 'Juego detenido' };
-  }
+    const userGame = this.userGames.get(userId);
+    if (userGame?.timeout) clearTimeout(userGame.timeout);
 
-  private clearTimeouts() {
-    this.timeouts.forEach((timeout) => clearTimeout(timeout));
-    this.timeouts = [];
+    this.server.to(userId).emit('gameStopped');
+    console.log(`Juego detenido manualmente para ${userId}`);
+
+    return { success: true };
   }
 
   onModuleDestroy() {
     console.log('Destruyendo módulo GameQuestionsGateway');
-    this.clearTimeouts();
+    for (const [, game] of this.userGames) {
+      if (game.timeout) clearTimeout(game.timeout);
+    }
   }
 }

@@ -5,7 +5,7 @@ import { QuestionService } from '../question/question.service';
 export class GameQuestionsService {
   constructor(private readonly questionService: QuestionService) {}
 
-  async getQuestion() {
+  async getQuestions() {
     return await this.questionService.getRandomQuestions();
   }
 }
