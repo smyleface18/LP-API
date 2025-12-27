@@ -1,9 +1,8 @@
 import { IsNotEmpty, IsNumber, IsString } from 'class-validator';
-import { CoreEntity } from './model.core';
+import { CoreEntity, S3Object } from './model.core';
 import { Column, Entity, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
 import { CategoryQuestion } from './category-question.entity';
 import { QuestionOption } from './question-option.entity';
-
 @Entity()
 export class Question extends CoreEntity {
   @IsString()
@@ -29,4 +28,7 @@ export class Question extends CoreEntity {
     default: 5000,
   })
   timeLimit: number; // debe ser en milisegundo
+
+  @Column({ type: 'json', nullable: true })
+  media?: S3Object;
 }

@@ -1,4 +1,4 @@
-export enum OptionRenderType {
+export enum RenderType {
   TEXT = 'TEXT',
   AUDIO = 'AUDIO',
   IMAGE = 'IMAGE',
