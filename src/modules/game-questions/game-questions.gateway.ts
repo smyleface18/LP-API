@@ -89,7 +89,6 @@ export class GameQuestionsGateway
       totalQuestions: userGame.questions.length,
       timeLimit: 5000,
     });
-
     // Crear timeout para pasar a la siguiente si no responde
     userGame.timeout = setTimeout(() => {
       console.log(`Tiempo agotado para ${userId} en la pregunta ${question.id}`);
@@ -110,11 +109,11 @@ export class GameQuestionsGateway
     if (userGame.timeout) clearTimeout(userGame.timeout);
 
     const question = userGame.questions[userGame.currentIndex];
-    const correct = question.correctAnswer === data.answer;
+    const correct = data.answer;
 
     client.emit('answerResult', {
       correct,
-      correctAnswer: question.correctAnswer,
+      correctAnswer: question.options.filter((op) => op.isCorrect),
       questionId: question.id,
     });
 

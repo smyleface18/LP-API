@@ -1,34 +1,23 @@
-import { ArrayNotEmpty, IsArray, IsNotEmpty, IsOptional, IsString, IsUrl } from 'class-validator';
+import { IsNotEmpty, IsString } from 'class-validator';
 import { CoreEntity } from './model.core';
-import { Column, Entity, JoinColumn, ManyToOne } from 'typeorm';
-import { IsAnswerInOptions } from 'src/common/decorators/validators/is-answer-in-options.validator';
+import { Column, Entity, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
 import { CategoryQuestion } from './category-question.entity';
+import { QuestionOption } from './question-option.entity';
 
 @Entity()
 export class Question extends CoreEntity {
-  @IsOptional()
   @IsString()
-  @Column({ nullable: true })
-  questionText?: string;
-
-  @IsOptional()
-  @IsUrl()
-  @Column({ nullable: true })
-  questionImage?: string;
-
-  @IsArray()
-  @ArrayNotEmpty()
-  @IsString({ each: true })
-  @Column('text', { array: true })
-  options: string[];
-
-  @IsAnswerInOptions({ message: 'The correct answer must be within options.' })
   @Column()
-  correctAnswer: string;
+  questionText: string;
 
   @ManyToOne(() => CategoryQuestion, (category) => category.questions)
   @JoinColumn({ name: 'category_id' })
   category: CategoryQuestion;
+
+  @OneToMany(() => QuestionOption, (questionOption) => questionOption.question, {
+    cascade: true,
+  })
+  options: QuestionOption[];
 
   @IsNotEmpty()
   @Column({ name: 'category_id' })

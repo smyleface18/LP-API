@@ -21,6 +21,7 @@ export class CategoryQuestion extends CoreEntity {
   @OneToMany(() => Question, (question) => question.category)
   questions: Question[];
 
+  @IsEnum(TypeQuestionCategory)
   @Column({
     type: 'enum',
     enum: TypeQuestionCategory,

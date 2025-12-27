@@ -6,7 +6,7 @@ export class CoreEntity {
   id: string;
 
   @IsBoolean()
-  @Column({ type: 'boolean', nullable: true, default: true })
+  @Column({ type: 'boolean', nullable: false, default: true })
   active: boolean;
 
   @CreateDateColumn({ nullable: false })
@@ -14,4 +14,16 @@ export class CoreEntity {
 
   @UpdateDateColumn({ nullable: true })
   updatedAt: Date;
+}
+
+export class S3Object {
+  key: string;
+
+  type: string;
+
+  displayName?: string;
+
+  url?: string;
+
+  bucketName?: string;
 }
