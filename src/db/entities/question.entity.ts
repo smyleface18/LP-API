@@ -24,7 +24,7 @@ export class Question extends CoreEntity {
 
   @IsNumber()
   @Column({
-    type: 'number',
+    type: 'int',
     default: 5000,
   })
   timeLimit: number; // debe ser en milisegundo

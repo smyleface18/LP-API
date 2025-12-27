@@ -4,7 +4,6 @@ import { UpdateQuestionOptionDto } from './dto/update-question-option.dto';
 import { QuestionOption } from 'src/db/entities/question-option.entity';
 import { DeleteResult, Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
-import { OptionRenderType } from 'src/db/enum/option.enum';
 
 @Injectable()
 export class QuestionOptionsService {
@@ -41,17 +40,15 @@ export class QuestionOptionsService {
       throw new HttpException(`Question option with id ${id} not found`, HttpStatus.NOT_FOUND);
     }
 
-    const renderType = updateQuestionOptionDto.renderType ?? questionOption.renderType;
-
     const text = updateQuestionOptionDto.text ?? questionOption.text;
 
-    const mediaUrl = updateQuestionOptionDto.mediaUrl ?? questionOption.mediaUrl;
+    const media = updateQuestionOptionDto.media ?? questionOption.media;
 
-    if (renderType === OptionRenderType.TEXT && !text) {
+    if (!text) {
       throw new HttpException('Text is required when renderType is TEXT', HttpStatus.BAD_REQUEST);
     }
 
-    if (renderType !== OptionRenderType.TEXT && !mediaUrl) {
+    if (!media) {
       throw new HttpException(
         'mediaUrl is required when renderType is AUDIO, IMAGE or VIDEO',
         HttpStatus.BAD_REQUEST,
