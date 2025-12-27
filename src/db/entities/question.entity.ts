@@ -1,8 +1,9 @@
 import { IsNotEmpty, IsNumber, IsString } from 'class-validator';
 import { CoreEntity, S3Object } from './model.core';
-import { Column, Entity, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToMany, ManyToOne, OneToMany } from 'typeorm';
 import { CategoryQuestion } from './category-question.entity';
 import { QuestionOption } from './question-option.entity';
+import { Game } from './game.entity';
 @Entity()
 export class Question extends CoreEntity {
   @IsString()
@@ -31,4 +32,7 @@ export class Question extends CoreEntity {
 
   @Column({ type: 'json', nullable: true })
   media?: S3Object;
+
+  @ManyToMany(() => Game, (game) => game.questions)
+  games: Game[];
 }

@@ -1,6 +1,6 @@
 import { Column, Entity, ManyToOne } from 'typeorm';
 import { CoreEntity, S3Object } from './model.core';
-import { GameQuestion } from './game-question.entity';
+import { UserGame } from './game.entity';
 import { IsEmail } from 'class-validator';
 
 @Entity()
@@ -18,6 +18,6 @@ export class User extends CoreEntity {
   @Column({ type: 'json', nullable: true })
   avatar: S3Object;
 
-  @ManyToOne(() => GameQuestion, (gameQuestion) => gameQuestion.users)
-  gameQuestion: GameQuestion;
+  @ManyToOne(() => UserGame, (userGame) => userGame.user)
+  userGames: UserGame;
 }
