@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsString } from 'class-validator';
 import { CoreEntity } from './model.core';
 import { Column, Entity, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
 import { CategoryQuestion } from './category-question.entity';
@@ -22,4 +22,11 @@ export class Question extends CoreEntity {
   @IsNotEmpty()
   @Column({ name: 'category_id' })
   categoryId: string;
+
+  @IsNumber()
+  @Column({
+    type: 'number',
+    default: 5000,
+  })
+  timeLimit: number; // debe ser en milisegundo
 }
