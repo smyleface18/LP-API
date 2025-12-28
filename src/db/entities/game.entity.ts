@@ -1,16 +1,16 @@
 import { Entity, Column, OneToMany, ManyToOne, ManyToMany, JoinTable } from 'typeorm';
 import { User } from './user.entity';
 import { CoreEntity } from './model.core';
-import { LevelCategoryQuestion } from '../enum/question.enum';
+import { Level } from '../enum/question.enum';
 import { Question } from './question.entity';
 
 @Entity()
 export class Game extends CoreEntity {
   @Column({
     type: 'enum',
-    enum: LevelCategoryQuestion,
+    enum: Level,
   })
-  difficulty: LevelCategoryQuestion;
+  difficulty: Level;
 
   @ManyToMany(() => Question, (question) => question.games)
   @JoinTable()

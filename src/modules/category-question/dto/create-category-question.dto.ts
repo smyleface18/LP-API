@@ -1,4 +1,10 @@
-import { PartialType } from '@nestjs/mapped-types';
+import { OmitType } from '@nestjs/mapped-types';
 import { CategoryQuestion } from 'src/db/entities';
 
-export class CreateCategoryQuestionDto extends PartialType(CategoryQuestion) {}
+export class CreateCategoryQuestionDto extends OmitType(CategoryQuestion, [
+  'id',
+  'active',
+  'createdAt',
+  'updatedAt',
+  'questions',
+] as const) {}

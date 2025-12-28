@@ -11,6 +11,10 @@ export class QuestionOptionsController {
   create(@Body() createQuestionOptionDto: CreateQuestionOptionDto) {
     return this.questionOptionsService.create(createQuestionOptionDto);
   }
+  @Post('/batch')
+  createMany(@Body() createQuestionOptionDto: CreateQuestionOptionDto[]) {
+    return this.questionOptionsService.createMany(createQuestionOptionDto);
+  }
 
   @Get()
   findAll() {

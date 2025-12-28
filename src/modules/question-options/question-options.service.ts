@@ -16,6 +16,10 @@ export class QuestionOptionsService {
     return await this.repo.save(createQuestionOptionDto);
   }
 
+  async createMany(createQuestionOptionDto: CreateQuestionOptionDto[]): Promise<QuestionOption[]> {
+    return await this.repo.save(createQuestionOptionDto);
+  }
+
   async findAll(): Promise<QuestionOption[]> {
     return await this.repo.find();
   }

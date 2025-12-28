@@ -12,7 +12,7 @@ export class QuestionController {
     return this.questionService.create(createQuestionDto);
   }
 
-  @Post('/bulk')
+  @Post('/batch')
   createMany(@Body() createQuestionDto: CreateQuestionDto[]) {
     return this.questionService.createMany(createQuestionDto);
   }

@@ -10,7 +10,7 @@ import {
 import { GameQuestionsService } from './game-questions.service';
 import { OnModuleDestroy } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
-import { Question } from 'src/db/entities';
+import { Question, QuestionOption } from 'src/db/entities';
 
 @WebSocketGateway({
   namespace: '/game',
@@ -99,7 +99,7 @@ export class GameQuestionsGateway
 
   @SubscribeMessage('answer')
   handleAnswer(
-    @MessageBody() data: { questionId: string; userId: string; answer: string },
+    @MessageBody() data: { questionId: string; userId: string; answer: QuestionOption },
     @ConnectedSocket() client: Socket,
   ) {
     const userGame = this.userGames.get(data.userId);
@@ -109,7 +109,7 @@ export class GameQuestionsGateway
     if (userGame.timeout) clearTimeout(userGame.timeout);
 
     const question = userGame.questions[userGame.currentIndex];
-    const correct = data.answer;
+    const correct = data.answer.isCorrect;
 
     client.emit('answerResult', {
       correct,

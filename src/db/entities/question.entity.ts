@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumber, IsString } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
 import { CoreEntity, S3Object } from './model.core';
 import { Column, Entity, JoinColumn, ManyToMany, ManyToOne, OneToMany } from 'typeorm';
 import { CategoryQuestion } from './category-question.entity';
@@ -20,9 +20,11 @@ export class Question extends CoreEntity {
   options: QuestionOption[];
 
   @IsNotEmpty()
-  @Column({ name: 'category_id' })
+  @IsUUID()
+  @Column({ name: 'category_id', type: 'uuid' })
   categoryId: string;
 
+  @IsOptional()
   @IsNumber()
   @Column({
     type: 'int',

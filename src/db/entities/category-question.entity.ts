@@ -2,16 +2,16 @@ import { IsEnum, IsNotEmpty, IsString } from 'class-validator';
 import { CoreEntity } from './model.core';
 import { Column, Entity, OneToMany } from 'typeorm';
 import { Question } from './question.entity';
-import { LevelCategoryQuestion, TypeQuestionCategory } from '../enum/question.enum';
+import { Level, TypeQuestionCategory } from '../enum/question.enum';
 
 @Entity()
 export class CategoryQuestion extends CoreEntity {
-  @IsEnum(LevelCategoryQuestion)
+  @IsEnum(Level)
   @Column({
     type: 'enum',
-    enum: LevelCategoryQuestion,
+    enum: Level,
   })
-  level: LevelCategoryQuestion;
+  level: Level;
 
   @IsString()
   @IsNotEmpty()

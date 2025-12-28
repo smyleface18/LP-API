@@ -45,6 +45,8 @@ export class QuestionService {
     // Si estás usando TypeORM
     const questions = await this.repo
       .createQueryBuilder('question')
+      .leftJoinAndSelect('question.category', 'category')
+      .leftJoinAndSelect('question.options', 'options')
       .orderBy('RANDOM()') // Para PostgreSQL
       .limit(limit)
       .getMany();
