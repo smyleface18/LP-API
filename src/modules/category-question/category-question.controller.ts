@@ -1,7 +1,11 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards } from '@nestjs/common';
 import { CategoryQuestionService } from './category-question.service';
 import { CreateCategoryQuestionDto } from './dto/create-category-question.dto';
 import { UpdateCategoryQuestionDto } from './dto/update-category-question.dto';
+import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
+import { UserRoles } from 'src/db/enum/roles.enum';
 
 @Controller('category-question')
 export class CategoryQuestionController {
@@ -12,6 +16,8 @@ export class CategoryQuestionController {
     return this.categoryQuestionService.create(createCategoryQuestionDto);
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRoles.PLAYER)
   @Get()
   findAll() {
     return this.categoryQuestionService.findAll();

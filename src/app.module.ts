@@ -6,6 +6,7 @@ import { GameQuestionsModule } from './modules/game-questions/game-questions.mod
 import { QuestionModule } from './modules/question/question.module';
 import { CategoryQuestionModule } from './modules/category-question/category-question.module';
 import { QuestionOptionsModule } from './modules/question-options/question-options.module';
+import { AuthModule } from './modules/auth/auth.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { QuestionOptionsModule } from './modules/question-options/question-optio
     GameQuestionsModule,
     CategoryQuestionModule,
     QuestionOptionsModule,
+    AuthModule,
   ],
   controllers: [AppController],
   providers: [AppService],
