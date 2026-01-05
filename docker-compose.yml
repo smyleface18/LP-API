@@ -1,18 +1,42 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:15
     container_name: ${POSTGRES_CONTAINER_NAME:-DB-LGP}
     restart: always
     ports:
-      - "${POSTGRES_PORT}:5432"
+      - '${POSTGRES_PORT}:5432'
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql/data
+  redis:
+    container_name: lp-api-redisdb
+    image: 'redis/redis-stack-server:latest'
+    ports:
+      - '6379:6379'
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+    networks:
+      - app-tier
+  redis-commander:
+    container_name: lp-api-redis-cmd
+    hostname: redis-commander
+    image: rediscommander/redis-commander
+    restart: always
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - '8081:8081'
+    networks:
+      - app-tier
+    depends_on:
+      - redis
 
 volumes:
   pgdata:
+
+networks:
+  app-tier:
+    driver: bridge

@@ -1,7 +1,9 @@
 import {
   AdminAddUserToGroupCommand,
+  ChangePasswordCommand,
   CognitoIdentityProviderClient,
   InitiateAuthCommand,
+  RevokeTokenCommand,
   SignUpCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
@@ -39,6 +41,7 @@ export class AuthService {
       });
       if (existingUser) {
         throw new BadRequestException('Email already in use');
+        return;
       }
 
       const usernameId = v4();
@@ -73,7 +76,8 @@ export class AuthService {
 
       return {
         userSub: response.UserSub,
-        message: 'User registered. Please check your email for verification code.',
+        message:
+          'Usuario registrado. Por favor, revise su correo electrónico para obtener el código de verificación.',
       };
     } catch (error) {
       throw new BadRequestException(error);
@@ -92,7 +96,6 @@ export class AuthService {
       });
 
       const response = await this.cognitoClient.send(command);
-
       return {
         accessToken: response.AuthenticationResult?.AccessToken,
         idToken: response.AuthenticationResult?.IdToken,
@@ -102,5 +105,66 @@ export class AuthService {
     } catch (e) {
       throw new UnauthorizedException(e, 'Invalid credentials');
     }
+  }
+
+  async refreshToken(refreshToken: string) {
+    try {
+      const command = new InitiateAuthCommand({
+        AuthFlow: 'REFRESH_TOKEN_AUTH',
+        ClientId: this.clientId,
+        AuthParameters: {
+          refreshToken: refreshToken,
+        },
+      });
+
+      const response = await this.cognitoClient.send(command);
+      return {
+        accessToken: response.AuthenticationResult?.AccessToken,
+        idToken: response.AuthenticationResult?.IdToken,
+        refreshToken: response.AuthenticationResult?.RefreshToken,
+        expiresIn: response.AuthenticationResult?.ExpiresIn,
+      };
+    } catch (e) {
+      throw new UnauthorizedException(e, 'Invalid refresh token');
+    }
+  }
+
+  async changePassword(accessToken: string, oldPassword: string, newPassword: string) {
+    try {
+      const command = new ChangePasswordCommand({
+        AccessToken: accessToken,
+        PreviousPassword: oldPassword,
+        ProposedPassword: newPassword,
+      });
+
+      await this.cognitoClient.send(command);
+
+      return { message: 'Password changed successfully' };
+    } catch (error) {
+      throw new BadRequestException(error);
+    }
+  }
+
+  async revokeToken(refreshToken: string) {
+    try {
+      const command = new RevokeTokenCommand({
+        ClientId: this.clientId,
+        Token: refreshToken,
+      });
+
+      await this.cognitoClient.send(command);
+
+      return { message: 'Token revoked successfully' };
+    } catch (error) {
+      throw new BadRequestException(error);
+    }
+  }
+
+  async me(id: string) {
+    return await this.userRepository.findOne({
+      where: {
+        id: id,
+      },
+    });
   }
 }

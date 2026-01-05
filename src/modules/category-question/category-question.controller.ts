@@ -17,7 +17,7 @@ export class CategoryQuestionController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRoles.PLAYER)
+  @Roles(UserRoles.ADMIN)
   @Get()
   findAll() {
     return this.categoryQuestionService.findAll();

@@ -8,9 +8,12 @@ import {
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { GameQuestionsService } from './game-questions.service';
-import { OnModuleDestroy } from '@nestjs/common';
+import { BadRequestException, OnModuleDestroy } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
-import { Question, QuestionOption } from 'src/db/entities';
+import { Game, QuestionOption, User, UserGame } from 'src/db/entities';
+import { Match } from './dto/match.dto';
+import { Repository } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
 
 @WebSocketGateway({
   namespace: '/game',
@@ -27,12 +30,17 @@ export class GameQuestionsGateway
   @WebSocketServer() server: Server;
 
   private connectedUsers = new Map<string, string>(); // socketId -> userId
-  private userGames = new Map<
-    string,
-    { questions: Question[]; currentIndex: number; timeout?: NodeJS.Timeout }
-  >();
+  private matchs: Match[];
 
-  constructor(private readonly gameQuestionsService: GameQuestionsService) {}
+  constructor(
+    private readonly gameQuestionsService: GameQuestionsService,
+    @InjectRepository(Game)
+    private readonly gameRepository: Repository<Game>,
+    @InjectRepository(User)
+    private readonly userRepository: Repository<User>,
+    @InjectRepository(UserGame)
+    private readonly userGameRepository: Repository<UserGame>,
+  ) {}
 
   handleConnection(client: Socket) {
     console.log(`Cliente conectado: ${client.id}`);
@@ -42,7 +50,8 @@ export class GameQuestionsGateway
     console.log(`Cliente desconectado: ${client.id}`);
     const userId = this.connectedUsers.get(client.id);
     if (userId) {
-      const userGame = this.userGames.get(userId);
+      const game = new (userId,  new Match());
+      const userGame = this.game.push();
       if (userGame?.timeout) clearTimeout(userGame.timeout);
       this.userGames.delete(userId);
     }
@@ -50,16 +59,37 @@ export class GameQuestionsGateway
   }
 
   @SubscribeMessage('joinGame')
-  async handleJoinGame(@MessageBody() data: { userId: string }, @ConnectedSocket() client: Socket) {
+  async handleJoinGame(@MessageBody() data: { userId: string, idRoom: string }, @ConnectedSocket() client: Socket) {
+
     this.connectedUsers.set(client.id, data.userId);
     await client.join(data.userId);
 
     const questions = await this.gameQuestionsService.getQuestions();
-
-    this.userGames.set(data.userId, {
-      questions,
-      currentIndex: 0,
+    const user = await this.userRepository.findOne({
+      where: {
+        id: data.userId,
+      },
     });
+
+    if (!user) {
+      throw new BadRequestException('user not found');
+    }
+
+    const game = this.gameRepository.create({
+      difficulty: user.level,
+      questions: questions,
+    });
+
+    const savedGame = await this.gameRepository.save(game);
+
+    const userGame = this.userGameRepository.create({
+      gameId: savedGame.id,
+      userId: user.id,
+    });
+
+    await this.userGameRepository.save(userGame);
+
+    this.matchs.push(new Match([user], savedGame));
 
     console.log(`Usuario ${data.userId} unido al juego`);
     this.sendNextQuestion(data.userId);
@@ -69,7 +99,7 @@ export class GameQuestionsGateway
 
   /** Envia la siguiente pregunta o finaliza el juego */
   private sendNextQuestion(userId: string) {
-    const userGame = this.userGames.get(userId);
+    const userGame = this.matchs.find((match) => match. );
     if (!userGame) return;
 
     // Si ya no hay más preguntas -> finalizar
