@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { QuestionService } from '../question/question.service';
 
 @Injectable()
-export class GameQuestionsService {
+export class GameService {
   constructor(private readonly questionService: QuestionService) {}
 
   async getQuestions() {

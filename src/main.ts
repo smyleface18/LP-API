@@ -1,7 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
-import { RedisIoAdapter } from './modules/game-questions/redis-io.adapter';
+import { RedisIoAdapter } from './modules/game/redis-io.adapter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);

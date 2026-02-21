@@ -7,17 +7,15 @@ import {
   OnGatewayConnection,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { GameQuestionsService } from './game-questions.service';
+import { GameService } from './game.service';
 import { BadRequestException, OnModuleDestroy } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { Game, QuestionOption, User, UserGame } from 'src/db/entities';
-import { Match } from './dto/match.dto';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createClient, RedisClientType } from 'redis';
-import { IoAdapter } from '@nestjs/platform-socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
-import { MatchService } from './match.service';
+import { Match, MatchService } from './match.service';
 
 const pubClient: RedisClientType = createClient({ url: 'redis://localhost:6379' });
 const subClient: RedisClientType = pubClient.duplicate();
@@ -34,7 +32,7 @@ await Promise.all([pubClient.connect(), subClient.connect()]);
   transports: ['websocket', 'polling'],
   IoAdapter: createAdapter(pubClient, subClient),
 })
-export class GameQuestionsGateway
+export class GameGateway
   implements OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy
 {
   @WebSocketServer() server: Server;
@@ -43,7 +41,7 @@ export class GameQuestionsGateway
   private matchs: Match[];
 
   constructor(
-    private readonly gameQuestionsService: GameQuestionsService,
+    private readonly gameService: GameService,
     private readonly matchService: MatchService,
     @InjectRepository(Game)
     private readonly gameRepository: Repository<Game>,
@@ -55,7 +53,7 @@ export class GameQuestionsGateway
 
   handleConnection(client: Socket) {
   const userId = client.data.userId;
-  this.matchService.disconnectUser(userId);
+  this.matchService. (userId);
 
   console.log(`usuario desconectado: ${userId}`);
   }
@@ -83,7 +81,7 @@ export class GameQuestionsGateway
       throw new BadRequestException('user not found');
     }
 
-    const questions = await this.gameQuestionsService.getQuestions();
+    const questions = await this.gameService.getQuestions();
     const game = this.gameRepository.create({
       difficulty: user.level,
       questions: questions,
