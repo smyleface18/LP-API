@@ -14,6 +14,15 @@ import { Game, QuestionOption, User, UserGame } from 'src/db/entities';
 import { Match } from './dto/match.dto';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
+import { createClient, RedisClientType } from 'redis';
+import { IoAdapter } from '@nestjs/platform-socket.io';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { MatchService } from './match.service';
+
+const pubClient: RedisClientType = createClient({ url: 'redis://localhost:6379' });
+const subClient: RedisClientType = pubClient.duplicate();
+
+await Promise.all([pubClient.connect(), subClient.connect()]);
 
 @WebSocketGateway({
   namespace: '/game',
@@ -23,6 +32,7 @@ import { InjectRepository } from '@nestjs/typeorm';
     methods: ['GET', 'POST'],
   },
   transports: ['websocket', 'polling'],
+  IoAdapter: createAdapter(pubClient, subClient),
 })
 export class GameQuestionsGateway
   implements OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy
@@ -34,6 +44,7 @@ export class GameQuestionsGateway
 
   constructor(
     private readonly gameQuestionsService: GameQuestionsService,
+    private readonly matchService: MatchService,
     @InjectRepository(Game)
     private readonly gameRepository: Repository<Game>,
     @InjectRepository(User)
@@ -43,28 +54,25 @@ export class GameQuestionsGateway
   ) {}
 
   handleConnection(client: Socket) {
-    console.log(`Cliente conectado: ${client.id}`);
+  const userId = client.data.userId;
+  this.matchService.disconnectUser(userId);
+
+  console.log(`usuario desconectado: ${userId}`);
   }
 
-  handleDisconnect(client: Socket) {
-    console.log(`Cliente desconectado: ${client.id}`);
-    const userId = this.connectedUsers.get(client.id);
-    if (userId) {
-      const game = new (userId,  new Match());
-      const userGame = this.game.push();
-      if (userGame?.timeout) clearTimeout(userGame.timeout);
-      this.userGames.delete(userId);
-    }
-    this.connectedUsers.delete(client.id);
+  handleDisconnect(@ConnectedSocket() client: Socket) {
+  const userId = client.data.userId;
+  this.matchService.disconnectUser(userId);
+
+  console.log(`usuario desconectado: ${userId}`);
+
   }
 
   @SubscribeMessage('joinGame')
-  async handleJoinGame(@MessageBody() data: { userId: string, idRoom: string }, @ConnectedSocket() client: Socket) {
-
-    this.connectedUsers.set(client.id, data.userId);
-    await client.join(data.userId);
-
-    const questions = await this.gameQuestionsService.getQuestions();
+  async handleJoinGame(
+    @MessageBody() data: { userId: string; roomId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
     const user = await this.userRepository.findOne({
       where: {
         id: data.userId,
@@ -75,6 +83,7 @@ export class GameQuestionsGateway
       throw new BadRequestException('user not found');
     }
 
+    const questions = await this.gameQuestionsService.getQuestions();
     const game = this.gameRepository.create({
       difficulty: user.level,
       questions: questions,
@@ -89,21 +98,23 @@ export class GameQuestionsGateway
 
     await this.userGameRepository.save(userGame);
 
-    this.matchs.push(new Match([user], savedGame));
+    const match = new Match(savedGame);
+    this.matchs.push(match);
 
-    console.log(`Usuario ${data.userId} unido al juego`);
-    this.sendNextQuestion(data.userId);
+    await client.join(`match:${match.getRoomId()}`);
+    console.log(`Usuario ${user.id} se ha unido al juego`);
+    this.sendNextQuestion(match.getRoomId());
 
     return { success: true };
   }
 
   /** Envia la siguiente pregunta o finaliza el juego */
-  private sendNextQuestion(userId: string) {
-    const userGame = this.matchs.find((match) => match. );
-    if (!userGame) return;
+  private sendNextQuestion(roomId: string) {
+    const match = this.matchs.find((match) => match.getRoomId() == roomId);
+    if (!match) return;
 
     // Si ya no hay más preguntas -> finalizar
-    if (userGame.currentIndex >= userGame.questions.length) {
+    if (match.currentIndex >= match.) {
       this.server.to(userId).emit('gameEnded', { totalQuestions: userGame.currentIndex });
       console.log(`Juego finalizado para ${userId}`);
       return;
