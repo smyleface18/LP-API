@@ -29,6 +29,18 @@ export class EnvsService {
     return this.getString('POSTGRES_DB');
   }
 
+  get redisHost(): string {
+    return this.getString('REDIS_HOST');
+  }
+
+  get redisPort(): number {
+    return this.getNumber('REDIS_PORT', 6379);
+  }
+
+  get matchTtl(): number {
+    return this.getNumber('MATCH_TTL', 3600);
+  }
+
   // Helpers para evitar valores undefined
   private getString(key: string): string {
     const value = this.config.get<string>(key);
