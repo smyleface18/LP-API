@@ -5,7 +5,7 @@ import {
   WebSocketServer,
   OnGatewayDisconnect,
   OnGatewayConnection,
-  ConnectedSocket,
+  ConnectedSocket
 } from '@nestjs/websockets';
 import { GameService } from './game.service';
 import { BadRequestException, OnModuleDestroy } from '@nestjs/common';
@@ -15,7 +15,11 @@ import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createClient, RedisClientType } from 'redis';
 import { createAdapter } from '@socket.io/redis-adapter';
-import { Match, MatchService } from './match.service';
+import { Match } from './match/domain/match.entity';
+import { MatchService } from './match/match.service';
+import { ConnectionGameSocket } from './dto/connection-game.dto';
+import { GatewayResponse } from './dto/response-gatewey.dto';
+
 
 const pubClient: RedisClientType = createClient({ url: 'redis://localhost:6379' });
 const subClient: RedisClientType = pubClient.duplicate();
@@ -37,7 +41,6 @@ export class GameGateway
 {
   @WebSocketServer() server: Server;
 
-  private connectedUsers = new Map<string, string>(); // socketId -> userId
   private matchs: Match[];
 
   constructor(
@@ -51,19 +54,25 @@ export class GameGateway
     private readonly userGameRepository: Repository<UserGame>,
   ) {}
 
-  handleConnection(client: Socket) {
+  handleConnection(@ConnectedSocket() client: ConnectionGameSocket): GatewayResponse {
   const userId = client.data.userId;
-  this.matchService. (userId);
 
-  console.log(`usuario desconectado: ${userId}`);
+
+  console.log(`user connected: ${userId}`);
+
+  return {
+    ok: true,
+  }
   }
 
-  handleDisconnect(@ConnectedSocket() client: Socket) {
+  handleDisconnect(@ConnectedSocket() client: Socket): GatewayResponse {
   const userId = client.data.userId;
   this.matchService.disconnectUser(userId);
 
   console.log(`usuario desconectado: ${userId}`);
-
+  return {
+    ok: true,
+  }
   }
 
   @SubscribeMessage('joinGame')

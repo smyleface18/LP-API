@@ -15,7 +15,7 @@ services:
     container_name: lp-api-redisdb
     image: 'redis/redis-stack-server:latest'
     ports:
-      - '6379:6379'
+      - '${REDIS_HOST}:6379'
     environment:
       - ALLOW_EMPTY_PASSWORD=yes
     networks:

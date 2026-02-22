@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
-import { EnvsService } from 'src/common/envs/envs.service';
-import { EnvsModule } from 'src/common/envs/envs.module';
+import { EnvsService } from 'src/common/src/envs/envs.service';
+import { EnvsModule } from 'src/common/src/envs/envs.module';
 import * as entities from './entities';
 
 export const ENTITIES = Object.values(entities);

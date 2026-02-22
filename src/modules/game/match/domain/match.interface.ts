@@ -1,7 +1,5 @@
-import { User } from 'src/db/entities';
-
 export interface PlayerState {
-  user: User;
+  userId: string;
   score: number;
   isConnected: boolean;
 }

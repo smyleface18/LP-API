@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 import { CacheService } from './cache.service';
 import { EnvsService } from '../envs/envs.service';
-import { RedisClientOptions } from 'redis';
+import { CACHE_INSTANCE } from './cache.token';
+import { Cacheable } from 'cacheable';
+import KeyvRedis, { RedisClientOptions } from '@keyv/redis';
 
 @Module({
   providers: [

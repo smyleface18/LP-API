@@ -51,6 +51,6 @@ export class UserGame extends CoreEntity {
   @Column()
   score: number;
 
-  @Column()
-  completedAt: Date;
+  @Column({ type: 'int', nullable: true })
+  position: number;
 }

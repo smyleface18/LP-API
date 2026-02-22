@@ -1,1 +1,1 @@
-export class CreateGameQuestionDto {}
+export class CreateGameDto {}
