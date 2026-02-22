@@ -1,5 +1,5 @@
 import { Question } from 'src/db/entities';
-import { ModeMatch, PlayerState } from './match.interface';
+import { MatchStatus, ModeMatch, PlayerState } from './match.interface';
 import { Level } from 'src/db/enum/question.enum';
 import { v4 } from 'uuid';
 
@@ -7,7 +7,7 @@ export class Match {
   private readonly roomId: string;
   private players = new Map<string, PlayerState>();
   private currentQuestionIndex = 0;
-  private status: 'waiting' | 'playing' | 'finished' = 'waiting';
+  private status: MatchStatus = MatchStatus.WAITING;
   private questions: Question[];
   private readonly difficulty: Level;
 
@@ -63,7 +63,7 @@ export class Match {
 
   sendNextQuestion(): Question | null {
     if (this.currentQuestionIndex >= this.questions.length) {
-      this.status = 'finished';
+      this.status = MatchStatus.FINISHED;
       return null;
     }
 
@@ -89,5 +89,91 @@ export class Match {
 
   getStatus() {
     return this.status;
+  }
+
+  toPersistence(): any {
+    return {
+      roomId: this.roomId,
+      difficulty: this.difficulty,
+      status: this.status,
+      currentQuestionIndex: this.currentQuestionIndex,
+      players: Array.from(this.players.entries()),
+      questions: this.questions,
+    };
+  }
+
+  static fromPersistence(data: unknown): Match {
+    if (!data || typeof data !== 'object') {
+      throw new Error('Invalid match snapshot: not an object');
+    }
+
+    const snapshot = data as Record<string, unknown>;
+
+    // 🔎 Validar roomId
+    if (typeof snapshot.roomId !== 'string' || snapshot.roomId.length === 0) {
+      throw new Error('Invalid match snapshot: roomId');
+    }
+
+    // 🔎 Validar difficulty
+    if (!Object.values(Level).includes(snapshot.difficulty as Level)) {
+      throw new Error('Invalid match snapshot: difficulty');
+    }
+
+    // 🔎 Validar status
+    const allowedStatus: MatchStatus[] = [
+      MatchStatus.WAITING,
+      MatchStatus.PLAYING,
+      MatchStatus.FINISHED,
+    ];
+    if (!allowedStatus.includes(snapshot.status as MatchStatus)) {
+      throw new Error('Invalid match snapshot: status');
+    }
+
+    // 🔎 Validar currentQuestionIndex
+    if (typeof snapshot.currentQuestionIndex !== 'number' || snapshot.currentQuestionIndex < 0) {
+      throw new Error('Invalid match snapshot: currentQuestionIndex');
+    }
+
+    // 🔎 Validar questions
+    if (!Array.isArray(snapshot.questions)) {
+      throw new Error('Invalid match snapshot: questions');
+    }
+
+    // 🔎 Validar players
+    if (!Array.isArray(snapshot.players)) {
+      throw new Error('Invalid match snapshot: players');
+    }
+
+    // Crear instancia
+    const match = new Match(
+      snapshot.difficulty as Level,
+      ModeMatch.MULTIPLAYER,
+      snapshot.questions as Question[],
+    );
+
+    // Restaurar estado
+    match.status = snapshot.status as MatchStatus;
+    match.currentQuestionIndex = snapshot.currentQuestionIndex;
+
+    // Reconstruir Map de players
+    const playersMap = new Map<string, PlayerState>();
+
+    for (const entry of snapshot.players) {
+      if (
+        !Array.isArray(entry) ||
+        entry.length !== 2 ||
+        typeof entry[0] !== 'string' ||
+        typeof entry[1] !== 'object'
+      ) {
+        throw new Error('Invalid match snapshot: malformed player entry');
+      }
+
+      const playerState = entry[1] as PlayerState;
+      playersMap.set(entry[0], playerState);
+    }
+
+    match.players = playersMap;
+
+    return match;
   }
 }

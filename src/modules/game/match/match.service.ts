@@ -1,6 +1,5 @@
-import { User } from 'src/db/entities';
 import { ModeMatch } from './domain/match.interface';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { Match } from './domain/match.entity';
 import { CacheService } from 'src/common/src/cache/cache.service';
 import { Level } from 'src/db/enum/question.enum';
@@ -8,9 +7,6 @@ import { QuestionService } from 'src/modules/question/question.service';
 
 @Injectable()
 export class MatchService {
-  private matches = new Map<string, Match>();
-  private userMatchIndex = new Map<string, string>();
-
   constructor(
     private readonly cache: CacheService,
     private readonly questionService: QuestionService,
@@ -19,27 +15,25 @@ export class MatchService {
   async createMatch(difficulty: Level, mode: ModeMatch): Promise<void> {
     const questions = await this.questionService.getRandomQuestions(); // todo: bucar questions x level
     const match = new Match(difficulty, mode, questions);
-    await this.cache.set(`match:${match.getRoomId()}`, match, 300); // todo: definir tll x los times de las questions
+
+    await this.saveMatch(match);
   }
 
-  joinMatch(roomId: string, user: User): Match {
-    const match = this.matches.get(roomId);
+  async joinMatch(roomId: string, userId: string): Promise<Match> {
+    const raw = await this.cache.get<string>(`match:${roomId}`);
 
-    if (!match) {
-      throw new NotFoundException('Match not found');
+    if (!raw) {
+      throw new Error('Match not found');
     }
 
-    match.addPlayer(user.username);
-    this.userMatchIndex.set(user.id, roomId);
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+
+    const match = Match.fromPersistence(parsed);
+
+    match.addPlayer(userId);
+    await this.saveMatch(match);
 
     return match;
-  }
-
-  getMatchByUser(userId: string): Match | undefined {
-    const roomId = this.userMatchIndex.get(userId);
-    if (!roomId) return undefined;
-
-    return this.matches.get(roomId);
   }
 
   disconnectUser(userId: string) {
@@ -72,5 +66,9 @@ export class MatchService {
 
   getMatch(roomId: string): Match | undefined {
     return this.matches.get(roomId);
+  }
+
+  private async saveMatch(match: Match): Promise<void> {
+    await this.cache.set(`match:${match.getRoomId()}`, JSON.stringify(match.toPersistence()), 300); // todo: definir tll x los times de las questions
   }
 }
