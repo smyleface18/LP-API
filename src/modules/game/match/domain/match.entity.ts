@@ -2,13 +2,14 @@ import { Question } from 'src/db/entities';
 import { MatchStatus, ModeMatch, PlayerState } from './match.interface';
 import { Level } from 'src/db/enum/question.enum';
 import { v4 } from 'uuid';
+import { QuestionNotFoundError } from './exceptions/question-not-found.error';
 
 export class Match {
   private readonly roomId: string;
   private players = new Map<string, PlayerState>();
   private currentQuestionIndex = 0;
   private status: MatchStatus = MatchStatus.WAITING;
-  private questions: Question[];
+  private readonly questions: Question[];
   private readonly difficulty: Level;
 
   constructor(difficulty: Level, mode: ModeMatch, questions: Question[]) {
@@ -89,6 +90,19 @@ export class Match {
 
   getStatus() {
     return this.status;
+  }
+
+  getQuestions() {
+    return this.questions;
+  }
+
+  getQuestionById(questionId: string): Question {
+    const question = this.questions.find((q) => q.id == questionId);
+    if (!question) {
+      throw new QuestionNotFoundError(questionId);
+    }
+
+    return question;
   }
 
   toPersistence(): any {

@@ -14,11 +14,13 @@ export class MatchService {
     private readonly questionService: QuestionService,
   ) {}
 
-  async createMatch(difficulty: Level, mode: ModeMatch): Promise<void> {
+  async createMatch(difficulty: Level, mode: ModeMatch): Promise<Match> {
     const questions = await this.questionService.getRandomQuestions(); // todo: bucar questions x level
     const match = new Match(difficulty, mode, questions);
 
     await this.saveMatch(match);
+
+    return match;
   }
 
   async joinMatch(roomId: string, userId: string): Promise<Match> {

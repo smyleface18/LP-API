@@ -12,7 +12,7 @@ async function bootstrap() {
     credentials: true,
   });
 
-  // 👇 AGREGA ESTO - ValidationPipe global
+  // ValidationPipe global
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true, // Remueve propiedades que no están en el DTO
@@ -25,7 +25,6 @@ async function bootstrap() {
   );
 
   // Socket.IO Adapter
-
   const redisIoAdapter = new RedisIoAdapter();
   await redisIoAdapter.connectToRedis();
   app.useWebSocketAdapter(redisIoAdapter);

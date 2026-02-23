@@ -5,26 +5,20 @@ import {
   WebSocketServer,
   OnGatewayDisconnect,
   OnGatewayConnection,
-  ConnectedSocket
+  ConnectedSocket,
 } from '@nestjs/websockets';
 import { GameService } from './game.service';
 import { BadRequestException, OnModuleDestroy } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
-import { Game, QuestionOption, User, UserGame } from 'src/db/entities';
+import { Game, User, UserGame } from 'src/db/entities';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
-import { createClient, RedisClientType } from 'redis';
-import { createAdapter } from '@socket.io/redis-adapter';
 import { Match } from './match/domain/match.entity';
 import { MatchService } from './match/match.service';
 import { ConnectionGameSocket } from './dto/connection-game.dto';
 import { GatewayResponse } from './dto/response-gatewey.dto';
-
-
-const pubClient: RedisClientType = createClient({ url: 'redis://localhost:6379' });
-const subClient: RedisClientType = pubClient.duplicate();
-
-await Promise.all([pubClient.connect(), subClient.connect()]);
+import { Level } from 'src/db/enum/question.enum';
+import { ModeMatch } from './match/domain/match.interface';
 
 @WebSocketGateway({
   namespace: '/game',
@@ -34,11 +28,8 @@ await Promise.all([pubClient.connect(), subClient.connect()]);
     methods: ['GET', 'POST'],
   },
   transports: ['websocket', 'polling'],
-  IoAdapter: createAdapter(pubClient, subClient),
 })
-export class GameGateway
-  implements OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy
-{
+export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
 
   private matchs: Match[];
@@ -55,24 +46,26 @@ export class GameGateway
   ) {}
 
   handleConnection(@ConnectedSocket() client: ConnectionGameSocket): GatewayResponse {
-  const userId = client.data.userId;
+    const userId = client.data.userId;
 
+    console.log(`user connected: ${userId}`);
 
-  console.log(`user connected: ${userId}`);
-
-  return {
-    ok: true,
+    return {
+      ok: true,
+    };
   }
-  }
 
-  handleDisconnect(@ConnectedSocket() client: Socket): GatewayResponse {
-  const userId = client.data.userId;
-  this.matchService.disconnectUser(userId);
+  async handleDisconnect(
+    @ConnectedSocket() client: ConnectionGameSocket,
+  ): Promise<GatewayResponse> {
+    const userId = client.data.userId;
+    const roomId = client.data.roomId;
+    await this.matchService.disconnectUser(userId, roomId);
 
-  console.log(`usuario desconectado: ${userId}`);
-  return {
-    ok: true,
-  }
+    console.log(`usuario desconectado: ${userId}`);
+    return {
+      ok: true,
+    };
   }
 
   @SubscribeMessage('joinGame')
@@ -90,94 +83,43 @@ export class GameGateway
       throw new BadRequestException('user not found');
     }
 
-    const questions = await this.gameService.getQuestions();
-    const game = this.gameRepository.create({
-      difficulty: user.level,
-      questions: questions,
-    });
+    const match = await this.matchService.createMatch(Level.A1, ModeMatch.SINGLEPLAYER); // todo: implentar la manera de definir el level de la partida
 
-    const savedGame = await this.gameRepository.save(game);
-
-    const userGame = this.userGameRepository.create({
-      gameId: savedGame.id,
-      userId: user.id,
-    });
-
-    await this.userGameRepository.save(userGame);
-
-    const match = new Match(savedGame);
-    this.matchs.push(match);
-
-    await client.join(`match:${match.getRoomId()}`);
+    await client.join(match.getRoomId());
     console.log(`Usuario ${user.id} se ha unido al juego`);
-    this.sendNextQuestion(match.getRoomId());
 
-    return { success: true };
-  }
-
-  /** Envia la siguiente pregunta o finaliza el juego */
-  private sendNextQuestion(roomId: string) {
-    const match = this.matchs.find((match) => match.getRoomId() == roomId);
-    if (!match) return;
-
-    // Si ya no hay más preguntas -> finalizar
-    if (match.currentIndex >= match.) {
-      this.server.to(userId).emit('gameEnded', { totalQuestions: userGame.currentIndex });
-      console.log(`Juego finalizado para ${userId}`);
-      return;
-    }
-
-    const question = userGame.questions[userGame.currentIndex];
-    console.log(`Enviando pregunta ${userGame.currentIndex + 1} a ${userId}`);
-
-    // Emitir pregunta
-    this.server.to(userId).emit('newQuestion', {
-      question,
-      questionNumber: userGame.currentIndex + 1,
-      totalQuestions: userGame.questions.length,
-      timeLimit: 5000,
-    });
-    // Crear timeout para pasar a la siguiente si no responde
-    userGame.timeout = setTimeout(() => {
-      console.log(`Tiempo agotado para ${userId} en la pregunta ${question.id}`);
-      userGame.currentIndex++;
-      this.sendNextQuestion(userId);
-    }, 5000);
+    return { ok: true };
   }
 
   @SubscribeMessage('answer')
-  handleAnswer(
-    @MessageBody() data: { questionId: string; userId: string; answer: QuestionOption },
-    @ConnectedSocket() client: Socket,
+  async handleAnswer(
+    @MessageBody() data: { questionId: string; answerId: string },
+    @ConnectedSocket() client: ConnectionGameSocket,
   ) {
-    const userGame = this.userGames.get(data.userId);
-    if (!userGame) throw new Error('user game not found');
+    if (!data.questionId || !data.answerId) {
+      throw new BadRequestException('missing questionId or anwerId');
+    }
+    const userId = client.data.userId;
+    const roomId = client.data.roomId;
+    const match = await this.matchService.getMatch(roomId);
 
-    // Cancelar el timeout actual
-    if (userGame.timeout) clearTimeout(userGame.timeout);
-
-    const question = userGame.questions[userGame.currentIndex];
-    const correct = data.answer.isCorrect;
+    const answer = match
+      .getQuestionById(data.questionId)
+      .options.find((op) => op.id == data.answerId);
 
     client.emit('answerResult', {
-      correct,
-      correctAnswer: question.options.filter((op) => op.isCorrect),
-      questionId: question.id,
+      correct: answer?.isCorrect,
+      correctAnswer: match.getQuestionById(data.questionId).options.find((op) => op.isCorrect),
     });
 
     console.log(
-      `Usuario ${data.userId} respondió ${correct ? 'correctamente' : 'incorrectamente'}`,
+      `Usuario ${userId} respondió ${answer?.isCorrect ? 'correctamente' : 'incorrectamente'}`,
     );
-
-    // Pasar a la siguiente pregunta
-    setTimeout(() => {
-      userGame.currentIndex++;
-      this.sendNextQuestion(data.userId);
-    }, 1000);
 
     return { received: true };
   }
 
+  /*
   @SubscribeMessage('stopGame')
   handleStopGame(@ConnectedSocket() client: Socket) {
     const userId = this.connectedUsers.get(client.id);
@@ -191,11 +133,5 @@ export class GameGateway
 
     return { success: true };
   }
-
-  onModuleDestroy() {
-    console.log('Destruyendo módulo GameQuestionsGateway');
-    for (const [, game] of this.userGames) {
-      if (game.timeout) clearTimeout(game.timeout);
-    }
-  }
+    */
 }

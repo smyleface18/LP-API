@@ -8,7 +8,7 @@ export class RedisIoAdapter extends IoAdapter {
 
   async connectToRedis() {
     const pubClient = createClient({
-      url: 'redis://localhost:6379',
+      url: process.env.REDIS_URL ?? 'redis://localhost:6379',
     });
 
     const subClient = pubClient.duplicate();
@@ -19,6 +19,10 @@ export class RedisIoAdapter extends IoAdapter {
   }
 
   createIOServer(port: number, options?: ServerOptions): Server {
+    if (!this.adapterConstructor) {
+      throw new Error('Redis adapter not initialized');
+    }
+
     const server = super.createIOServer(port, options) as Server;
     server.adapter(this.adapterConstructor);
     return server;
