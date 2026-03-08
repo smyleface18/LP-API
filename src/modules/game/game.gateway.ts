@@ -8,7 +8,7 @@ import {
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { GameService } from './game.service';
-import { BadRequestException, OnModuleDestroy } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { Game, User, UserGame } from 'src/db/entities';
 import { Repository } from 'typeorm';
