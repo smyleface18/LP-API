@@ -2,6 +2,8 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { RedisIoAdapter } from './modules/game/redis-io.adapter';
+import { ResponseInterceptor } from './common/src/api/response.interceptor';
+import { HttpExceptionFilter } from './common/src/api/http-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -11,6 +13,12 @@ async function bootstrap() {
     origin: '*', // En producción, especifica dominios: ['http://localhost:3000', 'https://tuapp.com']
     credentials: true,
   });
+
+  // reponse interceptor
+  app.useGlobalInterceptors(new ResponseInterceptor());
+
+  // filter inteceptor http
+  app.useGlobalFilters(new HttpExceptionFilter());
 
   // ValidationPipe global
   app.useGlobalPipes(
