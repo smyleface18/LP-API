@@ -9,16 +9,16 @@ import {
 } from '@nestjs/websockets';
 import { GameService } from './game.service';
 import { BadRequestException } from '@nestjs/common';
-import { Server, Socket } from 'socket.io';
+import { Server } from 'socket.io';
 import { Game, User, UserGame } from 'src/db/entities';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Match } from './match/domain/match.entity';
 import { MatchService } from './match/match.service';
-import { ConnectionGameSocket } from './dto/connection-game.dto';
-import { GatewayResponse } from './dto/response-gatewey.dto';
 import { Level } from 'src/db/enum/question.enum';
 import { ModeMatch } from './match/domain/match.interface';
+import { ApiResponse } from 'src/common/src/api/api.type';
+import { ConnectionGameSocket } from './types';
+import { Match } from './match/domain/match.entity';
 
 @WebSocketGateway({
   namespace: '/game',
@@ -31,8 +31,6 @@ import { ModeMatch } from './match/domain/match.interface';
 })
 export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
-
-  private matchs: Match[];
 
   constructor(
     private readonly gameService: GameService,
@@ -68,11 +66,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     };
   }
 
-  @SubscribeMessage('joinGame')
-  async handleJoinGame(
+  @SubscribeMessage('createGame')
+  async handleCreateGame(
     @MessageBody() data: { userId: string; roomId: string },
-    @ConnectedSocket() client: Socket,
-  ) {
+    @ConnectedSocket() client: ConnectionGameSocket,
+  ): Promise<ApiResponse<Match>> {
     const user = await this.userRepository.findOne({
       where: {
         id: data.userId,
@@ -88,7 +86,41 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     await client.join(match.getRoomId());
     console.log(`Usuario ${user.id} se ha unido al juego`);
 
-    return { ok: true };
+    return {
+      ok: true,
+      data: match,
+      message: 'match created',
+    };
+  }
+
+  @SubscribeMessage('joinGame')
+  async handleJoinGame(
+    @ConnectedSocket() client: ConnectionGameSocket,
+  ): Promise<ApiResponse<Match>> {
+    const user = await this.userRepository.findOne({
+      where: {
+        id: client.data.userId,
+      },
+    });
+
+    if (!user) {
+      throw new BadRequestException('user not found');
+    }
+
+    const match = await this.matchService.getMatch(client.data.roomId);
+
+    if (!match) {
+      throw new BadRequestException('match not found');
+    }
+
+    await client.join(client.data.roomId);
+    console.log(`Usuario ${user.id} se ha unido al juego`);
+
+    return {
+      ok: true,
+      data: match,
+      message: 'match join',
+    };
   }
 
   @SubscribeMessage('answer')
