@@ -1,5 +1,6 @@
-import { PartialType } from '@nestjs/mapped-types';
 import { Socket } from 'socket.io';
+import { ModeMatch } from '../match/domain/match.interface';
+import { Level } from 'src/db/enum/question.enum';
 
 export interface ConnectionGameSocket extends Socket {
   data: {
@@ -8,17 +9,7 @@ export interface ConnectionGameSocket extends Socket {
   };
 }
 
-export class CreateGameDto {}
-
-export interface GatewayResponse<T = unknown> {
-  ok: boolean;
-  data?: T;
-  error?: {
-    message: string;
-    code: string;
-  };
-}
-
-export class UpdateGameDto extends PartialType(CreateGameDto) {
-  id: number;
+export interface CreateGameDto {
+  level: Level;
+  modeMatch: ModeMatch;
 }

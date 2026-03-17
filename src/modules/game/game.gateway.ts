@@ -14,10 +14,8 @@ import { Game, User, UserGame } from 'src/db/entities';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { MatchService } from './match/match.service';
-import { Level } from 'src/db/enum/question.enum';
-import { ModeMatch } from './match/domain/match.interface';
 import { ApiResponse } from 'src/common/src/api/api.type';
-import { ConnectionGameSocket } from './types';
+import { ConnectionGameSocket, CreateGameDto } from './types';
 import { Match } from './match/domain/match.entity';
 
 @WebSocketGateway({
@@ -43,19 +41,21 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly userGameRepository: Repository<UserGame>,
   ) {}
 
-  handleConnection(@ConnectedSocket() client: ConnectionGameSocket): GatewayResponse {
+  handleConnection(@ConnectedSocket() client: ConnectionGameSocket): ApiResponse<null> {
     const userId = client.data.userId;
 
     console.log(`user connected: ${userId}`);
 
     return {
       ok: true,
+      data: null,
+      message: 'user conected of game',
     };
   }
 
   async handleDisconnect(
     @ConnectedSocket() client: ConnectionGameSocket,
-  ): Promise<GatewayResponse> {
+  ): Promise<ApiResponse<null>> {
     const userId = client.data.userId;
     const roomId = client.data.roomId;
     await this.matchService.disconnectUser(userId, roomId);
@@ -63,17 +63,19 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     console.log(`usuario desconectado: ${userId}`);
     return {
       ok: true,
+      data: null,
+      message: 'user desconeted of game',
     };
   }
 
   @SubscribeMessage('createGame')
   async handleCreateGame(
-    @MessageBody() data: { userId: string; roomId: string },
+    @MessageBody() createGameDto: CreateGameDto,
     @ConnectedSocket() client: ConnectionGameSocket,
   ): Promise<ApiResponse<Match>> {
     const user = await this.userRepository.findOne({
       where: {
-        id: data.userId,
+        id: client.data.userId,
       },
     });
 
@@ -81,7 +83,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       throw new BadRequestException('user not found');
     }
 
-    const match = await this.matchService.createMatch(Level.A1, ModeMatch.SINGLEPLAYER); // todo: implentar la manera de definir el level de la partida
+    const match = await this.matchService.createMatch(createGameDto.level, createGameDto.modeMatch); // todo: implentar la manera de definir el level de la partida
 
     await client.join(match.getRoomId());
     console.log(`Usuario ${user.id} se ha unido al juego`);

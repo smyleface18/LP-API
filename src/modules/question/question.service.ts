@@ -4,6 +4,7 @@ import { UpdateQuestionDto } from './dto/update-question.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Question } from 'src/db/entities';
 import { Repository } from 'typeorm';
+import { Level } from 'src/db/enum/question.enum';
 
 @Injectable()
 export class QuestionService {
@@ -41,10 +42,10 @@ export class QuestionService {
     return await this.repo.delete(id);
   }
 
-  async getRandomQuestions(limit: number = 10): Promise<Question[]> {
-    // Si estás usando TypeORM
+  async getRandomQuestions(difficulty: Level, limit: number = 10): Promise<Question[]> {
     const questions = await this.repo
       .createQueryBuilder('question')
+      .where('question.level = :difficulty', { difficulty })
       .leftJoinAndSelect('question.category', 'category')
       .leftJoinAndSelect('question.options', 'options')
       .orderBy('RANDOM()') // Para PostgreSQL
