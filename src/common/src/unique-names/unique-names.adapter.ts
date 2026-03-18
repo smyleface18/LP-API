@@ -3,19 +3,12 @@ import { adjectives, animals, colors, uniqueNamesGenerator } from 'unique-names-
 
 @Injectable()
 export class UniqueNamesAdapter {
-  private readonly length: number = 3;
-  private readonly dictionaries: string[];
-
-  constructor(length: number, dictionaries?: string[]) {
-    this.length = length;
-    if (dictionaries) {
-      this.dictionaries = dictionaries;
-    }
-  }
+  private readonly length = 3;
+  private readonly dictionaries = [adjectives, animals, colors];
 
   NamesGenerator() {
     return uniqueNamesGenerator({
-      dictionaries: [adjectives, animals, colors],
+      dictionaries: this.dictionaries,
       length: this.length,
     });
   }

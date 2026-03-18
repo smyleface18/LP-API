@@ -18,7 +18,7 @@ import { EnvsService } from 'src/common/src/envs/envs.service';
     MatchModule,
     TypeOrmModule.forFeature(ENTITIES),
     BullModule.registerQueueAsync({
-      name: 'timeout-question',
+      name: 'game-question-timeout',
       imports: [EnvsModule],
       useFactory: async (envs: EnvsService) => ({
         connection: {
