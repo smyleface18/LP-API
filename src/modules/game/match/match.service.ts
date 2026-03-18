@@ -6,17 +6,31 @@ import { Level } from 'src/db/enum/question.enum';
 import { QuestionService } from 'src/modules/question/question.service';
 import { CacheKeys } from 'src/common/src/cache/cache-key';
 import { MatchNotFoundError } from './domain/exceptions/match-not-found.error';
+import { UniqueNamesAdapter } from 'src/common/src/unique-names/unique-names.adapter';
+import { v4 } from 'uuid';
 
 @Injectable()
 export class MatchService {
   constructor(
     private readonly cache: CacheService,
     private readonly questionService: QuestionService,
+    private readonly uniqueNames: UniqueNamesAdapter,
   ) {}
 
   async createMatch(difficulty: Level, mode: ModeMatch): Promise<Match> {
-    const questions = await this.questionService.getRandomQuestions(difficulty); // todo: bucar questions x level
-    const match = new Match(difficulty, mode, questions);
+    const questions = await this.questionService.getRandomQuestions(difficulty);
+
+    let roomId = '';
+    switch (mode) {
+      case ModeMatch.MULTIPLAYER:
+        roomId = this.uniqueNames.NamesGenerator();
+        break;
+      case ModeMatch.SINGLEPLAYER:
+        roomId = v4();
+        break;
+    }
+
+    const match = new Match(roomId, difficulty, mode, questions);
 
     await this.saveMatch(match);
 
@@ -24,14 +38,7 @@ export class MatchService {
   }
 
   async joinMatch(roomId: string, userId: string): Promise<Match> {
-    const raw = await this.cache.get<string>(CacheKeys.match(roomId));
-
-    if (!raw) {
-      throw new Error('Match not found');
-    }
-
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const match = Match.fromPersistence(parsed);
+    const match = await this.getMatch(roomId);
 
     match.addPlayer(userId);
     await this.cache.set(CacheKeys.match(roomId), match);

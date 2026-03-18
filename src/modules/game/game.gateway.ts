@@ -84,6 +84,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
 
     const match = await this.matchService.createMatch(createGameDto.level, createGameDto.modeMatch); // todo: implentar la manera de definir el level de la partida
+    match.addPlayer(user.id);
 
     await client.join(match.getRoomId());
     console.log(`Usuario ${user.id} se ha unido al juego`);
@@ -109,11 +110,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       throw new BadRequestException('user not found');
     }
 
-    const match = await this.matchService.getMatch(client.data.roomId);
-
-    if (!match) {
-      throw new BadRequestException('match not found');
-    }
+    const match = await this.matchService.joinMatch(client.data.roomId, user.id);
 
     await client.join(client.data.roomId);
     console.log(`Usuario ${user.id} se ha unido al juego`);

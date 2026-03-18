@@ -1,7 +1,6 @@
 import { Question } from 'src/db/entities';
 import { MatchStatus, ModeMatch, PlayerState } from './match.interface';
 import { Level } from 'src/db/enum/question.enum';
-import { v4 } from 'uuid';
 import { QuestionNotFoundError } from './exceptions/question-not-found.error';
 
 export class Match {
@@ -12,17 +11,8 @@ export class Match {
   private readonly questions: Question[];
   private readonly difficulty: Level;
 
-  constructor(difficulty: Level, mode: ModeMatch, questions: Question[]) {
+  constructor(roomId: string, difficulty: Level, mode: ModeMatch, questions: Question[]) {
     this.difficulty = difficulty;
-    let roomId = '';
-    switch (mode) {
-      case ModeMatch.MULTIPLAYER:
-        roomId = v4();
-        break;
-      case ModeMatch.SINGLEPLAYER:
-        roomId = v4();
-        break;
-    }
     this.roomId = roomId;
     this.questions = questions;
   }
@@ -160,6 +150,7 @@ export class Match {
 
     // Crear instancia
     const match = new Match(
+      snapshot.roomId,
       snapshot.difficulty as Level,
       ModeMatch.MULTIPLAYER,
       snapshot.questions as Question[],
