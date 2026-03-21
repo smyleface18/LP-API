@@ -20,7 +20,7 @@ import { EnvsService } from 'src/common/src/envs/envs.service';
     BullModule.registerQueueAsync({
       name: 'game-question-timeout',
       imports: [EnvsModule],
-      useFactory: async (envs: EnvsService) => ({
+      useFactory: (envs: EnvsService) => ({
         connection: {
           host: envs.redisHost,
           port: envs.redisPort,
