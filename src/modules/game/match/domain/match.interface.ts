@@ -1,3 +1,5 @@
+import { CategoryQuestion } from 'src/db/entities';
+import { S3Object } from 'src/db/entities/model.core';
 import { Level } from 'src/db/enum/question.enum';
 
 export interface PlayerState {
@@ -23,4 +25,19 @@ export interface MatchSnapshot {
   status: MatchStatus;
   currentQuestionIndex: number;
   players: [string, PlayerState][];
+}
+
+export interface OptionDto {
+  id: string;
+  text?: string;
+  media?: S3Object;
+}
+
+export interface QuestionDto {
+  questionText: string;
+  category: CategoryQuestion;
+  options: OptionDto[];
+  categoryId: string;
+  timeLimit: number;
+  media?: S3Object;
 }

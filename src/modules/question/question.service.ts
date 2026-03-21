@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Question } from 'src/db/entities';
 import { Repository } from 'typeorm';
 import { Level } from 'src/db/enum/question.enum';
+import { QuestionDto } from '../game/match/domain/match.interface';
 
 @Injectable()
 export class QuestionService {
@@ -45,13 +46,15 @@ export class QuestionService {
   async getRandomQuestions(difficulty: Level, limit: number = 10): Promise<Question[]> {
     const questions = await this.repo
       .createQueryBuilder('question')
+      .leftJoin('question.category', 'category')
+      .leftJoin('question.options', 'options')
+      .select(['options.id', 'options.text', 'options.media'])
       .where('question.level = :difficulty', { difficulty })
-      .leftJoinAndSelect('question.category', 'category')
-      .leftJoinAndSelect('question.options', 'options')
-      .orderBy('RANDOM()') // Para PostgreSQL
+      .orderBy('RANDOM()')
       .limit(limit)
       .getMany();
 
+    console.log(questions[0]);
     console.log(`${questions.length} preguntas seleccionadas aleatoriamente`);
     return questions;
   }
