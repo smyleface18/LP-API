@@ -63,6 +63,10 @@ export class QuestionService {
 
   private toQuestionDto(question: Question): QuestionDto {
     return {
+      id: question.id,
+      active: question.active,
+      createdAt: question.createdAt,
+      updatedAt: question.updatedAt,
       questionText: question.questionText,
       category: question.category,
       categoryId: question.categoryId,

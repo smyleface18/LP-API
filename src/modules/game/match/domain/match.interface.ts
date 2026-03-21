@@ -34,6 +34,10 @@ export interface OptionDto {
 }
 
 export interface QuestionDto {
+  id: string;
+  active: boolean;
+  createdAt: Date;
+  updatedAt: Date;
   questionText: string;
   category: CategoryQuestion;
   options: OptionDto[];
