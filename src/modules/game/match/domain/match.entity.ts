@@ -1,5 +1,5 @@
 import { Question } from 'src/db/entities';
-import { MatchStatus, ModeMatch, PlayerState } from './match.interface';
+import { MatchStatus, ModeMatch, PlayerState, QuestionDto } from './match.interface';
 import { Level } from 'src/db/enum/question.enum';
 import { QuestionNotFoundError } from './exceptions/question-not-found.error';
 
@@ -8,10 +8,10 @@ export class Match {
   private players = new Map<string, PlayerState>();
   private currentQuestionIndex = 0;
   private status: MatchStatus = MatchStatus.WAITING;
-  private readonly questions: Question[];
+  private readonly questions: QuestionDto[];
   private readonly difficulty: Level;
 
-  constructor(roomId: string, difficulty: Level, mode: ModeMatch, questions: Question[]) {
+  constructor(roomId: string, difficulty: Level, mode: ModeMatch, questions: QuestionDto[]) {
     this.difficulty = difficulty;
     this.roomId = roomId;
     this.questions = questions;
@@ -52,7 +52,7 @@ export class Match {
     return this.players.size;
   }
 
-  sendNextQuestion(): Question | null {
+  sendNextQuestion(): QuestionDto | null {
     if (this.currentQuestionIndex >= this.questions.length) {
       this.status = MatchStatus.FINISHED;
       return null;
@@ -86,7 +86,7 @@ export class Match {
     return this.questions;
   }
 
-  getQuestionById(questionId: string): Question {
+  getQuestionById(questionId: string): QuestionDto {
     const question = this.questions.find((q) => q.id == questionId);
     if (!question) {
       throw new QuestionNotFoundError(questionId);
