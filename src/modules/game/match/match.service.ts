@@ -28,6 +28,8 @@ export class MatchService {
       case ModeMatch.SINGLEPLAYER:
         roomId = v4();
         break;
+      default:
+        roomId = v4();
     }
 
     const match = new Match(roomId, difficulty, mode, questions);
