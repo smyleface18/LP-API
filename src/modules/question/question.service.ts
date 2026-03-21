@@ -43,19 +43,37 @@ export class QuestionService {
     return await this.repo.delete(id);
   }
 
-  async getRandomQuestions(difficulty: Level, limit: number = 10): Promise<Question[]> {
+  async getRandomQuestions(
+    difficulty: Level = Level.A1,
+    limit: number = 10,
+  ): Promise<QuestionDto[]> {
     const questions = await this.repo
       .createQueryBuilder('question')
-      .leftJoin('question.category', 'category')
-      .leftJoin('question.options', 'options')
-      .select(['options.id', 'options.text', 'options.media'])
-      .where('question.level = :difficulty', { difficulty })
+      .innerJoinAndSelect('question.category', 'category')
+      .leftJoinAndSelect('question.options', 'options')
+      .where('category.level = :difficulty', { difficulty })
       .orderBy('RANDOM()')
       .limit(limit)
       .getMany();
-
     console.log(questions[0]);
     console.log(`${questions.length} preguntas seleccionadas aleatoriamente`);
-    return questions;
+
+    return questions.map((q) => this.toQuestionDto(q));
+  }
+
+  private toQuestionDto(question: Question): QuestionDto {
+    return {
+      questionText: question.questionText,
+      category: question.category,
+      categoryId: question.categoryId,
+      timeLimit: question.timeLimit,
+      media: question.media,
+      options:
+        question.options?.map((option) => ({
+          id: option.id,
+          text: option.text,
+          media: option.media,
+        })) || [],
+    };
   }
 }
