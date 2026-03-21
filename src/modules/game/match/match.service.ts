@@ -1,4 +1,4 @@
-import { ModeMatch } from './domain/match.interface';
+import { ModeMatch, QuestionDto } from './domain/match.interface';
 import { Injectable } from '@nestjs/common';
 import { Match } from './domain/match.entity';
 import { CacheService } from 'src/common/src/cache/cache.service';
@@ -79,6 +79,15 @@ export class MatchService {
     }
 
     return match;
+  }
+
+  async nextQuestion(roomId: string): Promise<QuestionDto | null> {
+    const match = await this.getMatch(roomId);
+    const question = match.sendNextQuestion();
+    if (!question) {
+      return null;
+    }
+    return this.questionService.toQuestionDto(question);
   }
 
   private async saveMatch(match: Match): Promise<void> {

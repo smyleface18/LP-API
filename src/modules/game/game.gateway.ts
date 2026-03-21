@@ -140,7 +140,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     client.emit('answerResult', {
       correct: answer?.isCorrect,
-      correctAnswer: match.getQuestionById(data.questionId).options.find((op) => op.isCorrect),
+      correctAnswer: match.getQuestionById(data.questionId).options.filter((op) => op.isCorrect),
     });
 
     console.log(
