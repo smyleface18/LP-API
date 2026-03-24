@@ -13,3 +13,7 @@ export interface CreateGameDto {
   level: Level;
   modeMatch: ModeMatch;
 }
+
+export interface JoinGameDto {
+  roomId: string;
+}

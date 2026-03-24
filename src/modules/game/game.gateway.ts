@@ -15,7 +15,7 @@ import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { MatchService } from './match/match.service';
 import { ApiResponse } from 'src/common/src/api/api.type';
-import { ConnectionGameSocket, CreateGameDto } from './types';
+import { ConnectionGameSocket, CreateGameDto, JoinGameDto } from './types';
 import { Match } from './match/domain/match.entity';
 
 @WebSocketGateway({
@@ -87,8 +87,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     match.addPlayer(user.id);
 
     await client.join(match.getRoomId());
-    console.log(`Usuario ${user.id} se ha unido al juego`);
+    client.data.roomId = match.getRoomId();
 
+    console.log(`Usuario ${user.id} se ha unido al juego`);
     return {
       ok: true,
       data: match,
@@ -98,6 +99,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('joinGame')
   async handleJoinGame(
+    @MessageBody() joinGameDto: JoinGameDto,
     @ConnectedSocket() client: ConnectionGameSocket,
   ): Promise<ApiResponse<Match>> {
     const user = await this.userRepository.findOne({
@@ -110,9 +112,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       throw new BadRequestException('user not found');
     }
 
-    const match = await this.matchService.joinMatch(client.data.roomId, user.id);
+    const match = await this.matchService.joinMatch(joinGameDto.roomId, user.id);
 
     await client.join(client.data.roomId);
+    client.data.roomId = joinGameDto.roomId;
+
     console.log(`Usuario ${user.id} se ha unido al juego`);
 
     return {
