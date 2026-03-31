@@ -14,9 +14,13 @@ export enum ModeMatch {
 }
 
 export enum MatchStatus {
-  WAITING = 'waiting',
-  PLAYING = 'playing',
-  FINISHED = 'finished',
+  WAITING = 'WAITING',
+  QUESTION_ACTIVE = 'QUESTION_ACTIVE',
+  PROCESSING = 'PROCESSING',
+  BETWEEN_QUESTIONS = 'BETWEEN_QUESTIONS',
+  FINISHED = 'FINISHED',
+  STARTING = 'STARTING',
+  PREPARING = 'PREPARING',
 }
 
 export interface MatchSnapshot {
