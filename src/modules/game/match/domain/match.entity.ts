@@ -1,20 +1,28 @@
-import { Question } from 'src/db/entities';
+import { Question, User } from 'src/db/entities';
 import { MatchStatus, ModeMatch, PlayerState } from './match.interface';
 import { Level } from 'src/db/enum/question.enum';
 import { QuestionNotFoundError } from './exceptions/question-not-found.error';
 
 export class Match {
   private readonly roomId: string;
+  private readonly owner: User;
   private players = new Map<string, PlayerState>();
   private currentQuestionIndex = 0;
   private status: MatchStatus = MatchStatus.WAITING;
   private readonly questions: Question[];
   private readonly difficulty: Level;
 
-  constructor(roomId: string, difficulty: Level, mode: ModeMatch, questions: Question[]) {
+  constructor(
+    roomId: string,
+    difficulty: Level,
+    mode: ModeMatch,
+    questions: Question[],
+    owner: User,
+  ) {
     this.difficulty = difficulty;
     this.roomId = roomId;
     this.questions = questions;
+    this.owner = owner;
   }
 
   getRoomId(): string {
@@ -95,6 +103,18 @@ export class Match {
     return question;
   }
 
+  getOwner() {
+    return this.owner;
+  }
+
+  startMatchPreparation() {
+    this.status = MatchStatus.PREPARING;
+  }
+
+  getcurrentQuestionIndex() {
+    return this.currentQuestionIndex;
+  }
+
   toPersistence(): any {
     return {
       roomId: this.roomId,
@@ -103,6 +123,7 @@ export class Match {
       currentQuestionIndex: this.currentQuestionIndex,
       players: Array.from(this.players.entries()),
       questions: this.questions,
+      owner: this.owner,
     };
   }
 
@@ -126,8 +147,10 @@ export class Match {
     // 🔎 Validar status
     const allowedStatus: MatchStatus[] = [
       MatchStatus.WAITING,
-      MatchStatus.PLAYING,
+      MatchStatus.QUESTION_ACTIVE,
       MatchStatus.FINISHED,
+      MatchStatus.BETWEEN_QUESTIONS,
+      MatchStatus.PROCESSING,
     ];
     if (!allowedStatus.includes(snapshot.status as MatchStatus)) {
       throw new Error('Invalid match snapshot: status');
@@ -148,12 +171,17 @@ export class Match {
       throw new Error('Invalid match snapshot: players');
     }
 
+    if (typeof snapshot.owner !== 'object' || !snapshot.owner) {
+      throw new Error('Invalid match snapshot: owner');
+    }
+
     // Crear instancia
     const match = new Match(
       snapshot.roomId,
       snapshot.difficulty as Level,
       ModeMatch.MULTIPLAYER,
       snapshot.questions as Question[],
+      snapshot.owner as User,
     );
 
     // Restaurar estado
