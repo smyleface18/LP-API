@@ -8,7 +8,7 @@ import {
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { GameService } from './game.service';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { Server } from 'socket.io';
 import { Game, User, UserGame } from 'src/db/entities';
 import { Repository } from 'typeorm';
@@ -17,6 +17,11 @@ import { MatchService } from './match/match.service';
 import { ApiResponse } from 'src/common/src/api/api.type';
 import { ConnectionGameSocket, CreateGameDto, JoinGameDto } from './types';
 import { Match } from './match/domain/match.entity';
+import { WsJwtGuard } from 'src/common/src/guards/ws-jwt-guard';
+import { MatchNotFoundError } from './match/domain/exceptions/match-not-found.error';
+import { MatchStatus, QuestionDto } from './match/domain/match.interface';
+import { OnEvent } from '@nestjs/event-emitter';
+import { WsAuthService } from 'src/common/src/ws-auth/ws-auth.service';
 
 @WebSocketGateway({
   namespace: '/game',
@@ -31,20 +36,27 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
 
   constructor(
-    private readonly gameService: GameService,
     private readonly matchService: MatchService,
-    @InjectRepository(Game)
-    private readonly gameRepository: Repository<Game>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
-    @InjectRepository(UserGame)
-    private readonly userGameRepository: Repository<UserGame>,
+    private readonly wsAuthService: WsAuthService,
   ) {}
 
-  handleConnection(@ConnectedSocket() client: ConnectionGameSocket): ApiResponse<null> {
-    const userId = client.data.userId;
+  async handleConnection(
+    @ConnectedSocket() client: ConnectionGameSocket,
+  ): Promise<ApiResponse<null>> {
+    try {
+      const token = client.handshake.auth?.token as string;
 
-    console.log(`user connected: ${userId}`);
+      const payload = await this.wsAuthService.verifyToken(token);
+
+      client.data.userId = payload.username;
+      client.data.role = payload['cognito:groups'] || [];
+
+      console.log('user connected:', payload.username);
+    } catch {
+      client.disconnect();
+    }
 
     return {
       ok: true,
@@ -56,11 +68,21 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleDisconnect(
     @ConnectedSocket() client: ConnectionGameSocket,
   ): Promise<ApiResponse<null>> {
+    console.log(client.data, '🤔');
     const userId = client.data.userId;
     const roomId = client.data.roomId;
+
+    if (!userId || !roomId) {
+      return {
+        ok: true,
+        data: null,
+        message: 'user desconeted of game',
+      };
+    }
+
     await this.matchService.disconnectUser(userId, roomId);
 
-    console.log(`usuario desconectado: ${userId}`);
+    console.log(`user desconeted : ${userId}`);
     return {
       ok: true,
       data: null,
@@ -83,7 +105,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       throw new BadRequestException('user not found');
     }
 
-    const match = await this.matchService.createMatch(createGameDto.level, createGameDto.modeMatch); // todo: implentar la manera de definir el level de la partida
+    const match = await this.matchService.createMatch(
+      createGameDto.level,
+      createGameDto.modeMatch,
+      user,
+    ); // todo: implentar la manera de definir el level de la partida
     match.addPlayer(user.id);
 
     await client.join(match.getRoomId());
@@ -97,6 +123,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     };
   }
 
+  @UseGuards(WsJwtGuard)
   @SubscribeMessage('joinGame')
   async handleJoinGame(
     @MessageBody() joinGameDto: JoinGameDto,
@@ -114,7 +141,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const match = await this.matchService.joinMatch(joinGameDto.roomId, user.id);
 
-    await client.join(client.data.roomId);
+    if (match.getStatus() == MatchStatus.STARTING || match.getStatus() == MatchStatus.PREPARING) {
+      throw new BadRequestException('The game has already started.');
+    }
+
+    await client.join(joinGameDto.roomId);
     client.data.roomId = joinGameDto.roomId;
 
     console.log(`Usuario ${user.id} se ha unido al juego`);
@@ -126,6 +157,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     };
   }
 
+  @UseGuards(WsJwtGuard)
   @SubscribeMessage('answer')
   async handleAnswer(
     @MessageBody() data: { questionId: string; answerId: string },
@@ -136,6 +168,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
     const userId = client.data.userId;
     const roomId = client.data.roomId;
+
+    if (!userId || !roomId) {
+      throw new BadRequestException('missing userId or roomId');
+    }
+
     const match = await this.matchService.getMatch(roomId);
 
     const answer = match
@@ -154,6 +191,37 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return { received: true };
   }
 
+  @SubscribeMessage('startGame')
+  async handleStopGame(@ConnectedSocket() client: ConnectionGameSocket) {
+    const user = await this.userRepository.findOne({
+      where: {
+        id: client.data.userId,
+      },
+    });
+
+    if (!user) {
+      throw new BadRequestException('user not found');
+    }
+
+    if (!client.data.roomId) {
+      throw new BadRequestException('missing roomId');
+    }
+
+    const match = await this.matchService.getMatch(client.data.roomId);
+
+    if (!match) {
+      throw new MatchNotFoundError('match not found');
+    }
+
+    if (match.getOwner().id != user.id) {
+      throw new UnauthorizedException(
+        'you cannot start the partina because you are not the creator of the game',
+      );
+    }
+
+    return { success: true };
+  }
+
   /*
   @SubscribeMessage('stopGame')
   handleStopGame(@ConnectedSocket() client: Socket) {
@@ -169,4 +237,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return { success: true };
   }
     */
+
+  @OnEvent('game.next-question')
+  handleNextQuestion(payload: { matchId: string; question: QuestionDto }) {
+    this.server.to(payload.matchId).emit('new-question', payload.question);
+  }
 }

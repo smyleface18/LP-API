@@ -10,6 +10,8 @@ import { AuthModule } from './modules/auth/auth.module';
 import { CommonModule } from './common/src/common.module';
 import { MatchModule } from './modules/game/match/match.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { GameQueueModule } from './modules/game/queue/game-queue.module';
+import { WsAuthModule } from './common/src/ws-auth/ws-auth.module';
 
 @Module({
   imports: [
@@ -22,6 +24,8 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
     CommonModule,
     MatchModule,
     EventEmitterModule.forRoot(),
+    GameQueueModule,
+    WsAuthModule,
   ],
   controllers: [AppController],
   providers: [AppService],

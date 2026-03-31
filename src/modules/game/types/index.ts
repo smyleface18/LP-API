@@ -5,7 +5,8 @@ import { Level } from 'src/db/enum/question.enum';
 export interface ConnectionGameSocket extends Socket {
   data: {
     userId: string;
-    roomId: string;
+    role: string[];
+    roomId?: string;
   };
 }
 
