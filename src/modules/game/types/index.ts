@@ -17,3 +17,8 @@ export interface CreateGameDto {
 export interface JoinGameDto {
   roomId: string;
 }
+
+export interface TimeoutDto {
+  roomId: string;
+  timeLimit: number;
+}
