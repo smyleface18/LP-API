@@ -9,6 +9,7 @@ import { QuestionOptionsModule } from './modules/question-options/question-optio
 import { AuthModule } from './modules/auth/auth.module';
 import { CommonModule } from './common/src/common.module';
 import { MatchModule } from './modules/game/match/match.module';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { MatchModule } from './modules/game/match/match.module';
     AuthModule,
     CommonModule,
     MatchModule,
+    EventEmitterModule.forRoot(),
   ],
   controllers: [AppController],
   providers: [AppService],
