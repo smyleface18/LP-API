@@ -7,10 +7,9 @@ import {
   OnGatewayConnection,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { GameService } from './game.service';
 import { BadRequestException, UnauthorizedException, UseGuards } from '@nestjs/common';
 import { Server } from 'socket.io';
-import { Game, User, UserGame } from 'src/db/entities';
+import { User } from 'src/db/entities';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { MatchService } from './match/match.service';
@@ -45,17 +44,32 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleConnection(
     @ConnectedSocket() client: ConnectionGameSocket,
   ): Promise<ApiResponse<null>> {
-    try {
-      const token = client.handshake.auth?.token as string;
+    console.log('connection socket');
+    const token = client.handshake.auth?.token as string;
 
+    if (!token) {
+      client.emit('error', { message: 'Token missing' });
+      client.disconnect();
+      return {
+        ok: true,
+        data: null,
+        message: 'user disconnect of game',
+      };
+    }
+
+    try {
       const payload = await this.wsAuthService.verifyToken(token);
 
       client.data.userId = payload.username;
       client.data.role = payload['cognito:groups'] || [];
 
       console.log('user connected:', payload.username);
-    } catch {
-      client.disconnect();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error('Auth error:', errorMessage);
+
+      client.emit('error', { message: 'Unauthorized' }); // 👈 UX
+      client.disconnect(); // 👈 controlado
     }
 
     return {
