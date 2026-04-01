@@ -44,7 +44,7 @@ export class MatchService {
     const match = await this.getMatch(roomId);
 
     match.addPlayer(userId);
-    await this.cache.set(CacheKeys.match(roomId), match);
+    await this.saveMatch(match);
 
     return match;
   }
@@ -105,10 +105,11 @@ export class MatchService {
   }
 
   private async saveMatch(match: Match): Promise<void> {
-    await this.cache.set(
+    console.log((match.calculateMatchTimeout() + 30) * 1000);
+    return await this.cache.set(
       CacheKeys.match(match.getRoomId()),
-      JSON.stringify(match.toPersistence()),
-      300,
+      match.toPersistence(),
+      (match.calculateMatchTimeout() + 30) * 1000,
     );
   }
 }

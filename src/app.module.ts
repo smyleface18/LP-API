@@ -7,11 +7,11 @@ import { QuestionModule } from './modules/question/question.module';
 import { CategoryQuestionModule } from './modules/category-question/category-question.module';
 import { QuestionOptionsModule } from './modules/question-options/question-options.module';
 import { AuthModule } from './modules/auth/auth.module';
-import { CommonModule } from './common/src/common.module';
 import { MatchModule } from './modules/game/match/match.module';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { GameQueueModule } from './modules/game/queue/game-queue.module';
 import { WsAuthModule } from './common/src/ws-auth/ws-auth.module';
+import { CommonModule } from './common/common.module';
 
 @Module({
   imports: [
