@@ -8,6 +8,7 @@ import { CacheKeys } from 'src/common/src/cache/cache-key';
 import { MatchNotFoundError } from './domain/exceptions/match-not-found.error';
 import { UniqueNamesAdapter } from 'src/common/src/unique-names/unique-names.adapter';
 import { v4 } from 'uuid';
+import { User } from 'src/db/entities';
 
 @Injectable()
 export class MatchService {
@@ -17,7 +18,7 @@ export class MatchService {
     private readonly uniqueNames: UniqueNamesAdapter,
   ) {}
 
-  async createMatch(difficulty: Level, mode: ModeMatch): Promise<Match> {
+  async createMatch(difficulty: Level, mode: ModeMatch, owner: User): Promise<Match> {
     const questions = await this.questionService.getRandomQuestions(difficulty);
 
     let roomId = '';
@@ -32,10 +33,10 @@ export class MatchService {
         roomId = v4();
     }
 
-    const match = new Match(roomId, difficulty, mode, questions);
+    const match = new Match(roomId, difficulty, mode, questions, owner);
 
     await this.saveMatch(match);
-
+    console.log(await this.getMatch(match.getRoomId()));
     return match;
   }
 
@@ -87,6 +88,19 @@ export class MatchService {
     if (!question) {
       return null;
     }
+
+    return this.questionService.toQuestionDto(question);
+  }
+
+  async startMatch(roomId: string): Promise<QuestionDto | null> {
+    const match = await this.getMatch(roomId);
+    match.startMatchPreparation();
+
+    const question = match.sendNextQuestion();
+    if (!question) {
+      return null;
+    }
+
     return this.questionService.toQuestionDto(question);
   }
 
@@ -95,6 +109,6 @@ export class MatchService {
       CacheKeys.match(match.getRoomId()),
       JSON.stringify(match.toPersistence()),
       300,
-    ); // todo: definir tll x los times de las questions
+    );
   }
 }

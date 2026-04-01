@@ -68,8 +68,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error('Auth error:', errorMessage);
 
-      client.emit('error', { message: 'Unauthorized' }); // 👈 UX
-      client.disconnect(); // 👈 controlado
+      client.emit('error', { message: 'Unauthorized' });
+      client.disconnect();
     }
 
     return {
@@ -82,7 +82,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleDisconnect(
     @ConnectedSocket() client: ConnectionGameSocket,
   ): Promise<ApiResponse<null>> {
-    console.log(client.data, '🤔');
     const userId = client.data.userId;
     const roomId = client.data.roomId;
 
@@ -171,7 +170,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     };
   }
 
-  @UseGuards(WsJwtGuard)
   @SubscribeMessage('answer')
   async handleAnswer(
     @MessageBody() data: { questionId: string; answerId: string },
@@ -254,6 +252,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @OnEvent('game.next-question')
   handleNextQuestion(payload: { matchId: string; question: QuestionDto }) {
+    console.log('pregunta enviada');
     this.server.to(payload.matchId).emit('new-question', payload.question);
   }
 }

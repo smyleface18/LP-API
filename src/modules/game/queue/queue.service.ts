@@ -1,7 +1,6 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable } from '@nestjs/common';
 import { Queue, QueueEvents } from 'bullmq';
-import { EnvsService } from 'src/common/src/envs/envs.service';
 import { TimeoutDto } from '../types';
 
 @Injectable()
@@ -10,10 +9,10 @@ export class GameTimeoutQueue {
   constructor(
     @InjectQueue('game-question-timeout')
     private readonly queue: Queue,
-    private readonly envsService: EnvsService,
   ) {}
 
-  async createTimeout(timeoutDto: TimeoutDto): Promise<void> {
+  async scheduleNextQuestion(timeoutDto: TimeoutDto): Promise<void> {
+    console.log('add timeout');
     await this.queue.add(
       `end-question-roomId-${timeoutDto.roomId}`,
       {
