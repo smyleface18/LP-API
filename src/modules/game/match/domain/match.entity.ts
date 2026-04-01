@@ -11,6 +11,7 @@ export class Match {
   private status: MatchStatus = MatchStatus.WAITING;
   private readonly questions: Question[];
   private readonly difficulty: Level;
+  private readonly mode: ModeMatch;
 
   constructor(
     roomId: string,
@@ -23,6 +24,7 @@ export class Match {
     this.roomId = roomId;
     this.questions = questions;
     this.owner = owner;
+    this.mode = mode;
   }
 
   getRoomId(): string {
@@ -113,6 +115,10 @@ export class Match {
 
   getcurrentQuestionIndex() {
     return this.currentQuestionIndex;
+  }
+
+  calculateMatchTimeout(): number {
+    return this.questions.reduce((acc, question) => acc + question.timeLimit, 0);
   }
 
   toPersistence(): any {

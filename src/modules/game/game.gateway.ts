@@ -7,7 +7,7 @@ import {
   OnGatewayConnection,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { BadRequestException, UnauthorizedException, UseGuards } from '@nestjs/common';
+import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { Server } from 'socket.io';
 import { User } from 'src/db/entities';
 import { Repository } from 'typeorm';
@@ -16,8 +16,6 @@ import { MatchService } from './match/match.service';
 import { ApiResponse } from 'src/common/src/api/api.type';
 import { ConnectionGameSocket, CreateGameDto, JoinGameDto } from './types';
 import { Match } from './match/domain/match.entity';
-import { WsJwtGuard } from 'src/common/src/guards/ws-jwt-guard';
-import { MatchNotFoundError } from './match/domain/exceptions/match-not-found.error';
 import { MatchStatus, QuestionDto } from './match/domain/match.interface';
 import { OnEvent } from '@nestjs/event-emitter';
 import { WsAuthService } from 'src/common/src/ws-auth/ws-auth.service';
@@ -122,7 +120,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       createGameDto.level,
       createGameDto.modeMatch,
       user,
-    ); // todo: implentar la manera de definir el level de la partida
+    );
     match.addPlayer(user.id);
 
     await client.join(match.getRoomId());
@@ -136,7 +134,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     };
   }
 
-  @UseGuards(WsJwtGuard)
   @SubscribeMessage('joinGame')
   async handleJoinGame(
     @MessageBody() joinGameDto: JoinGameDto,
@@ -221,15 +218,17 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const match = await this.matchService.getMatch(client.data.roomId);
 
-    if (!match) {
-      throw new MatchNotFoundError('match not found');
-    }
-
     if (match.getOwner().id != user.id) {
       throw new UnauthorizedException(
         'you cannot start the partina because you are not the creator of the game',
       );
     }
+
+    if (match.getStatus() != MatchStatus.WAITING) {
+      throw new BadRequestException('The game has already started.');
+    }
+
+    match.startMatchPreparation();
 
     return { success: true };
   }

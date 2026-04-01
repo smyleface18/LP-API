@@ -1,13 +1,22 @@
 import { Injectable } from '@nestjs/common';
-import { QuestionService } from '../question/question.service';
+import { EventEmitter2 } from '@nestjs/event-emitter';
+import { MatchService } from './match/match.service';
 
 @Injectable()
 export class GameService {
-  constructor(private readonly questionService: QuestionService) {}
+  constructor(
+    private readonly matchService: MatchService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
-  /*
-  async getQuestions() {
-    return await this.questionService.getRandomQuestions();
+  async handleQuestionTimeout(roomId: string) {
+    //this.matchService.processAnswers(roomId);
+
+    const question = await this.matchService.nextQuestion(roomId);
+    console.log('send question', question);
+    this.eventEmitter.emit('game.next-question', {
+      roomId,
+      question,
+    });
   }
-    */
 }

@@ -36,7 +36,6 @@ export class MatchService {
     const match = new Match(roomId, difficulty, mode, questions, owner);
 
     await this.saveMatch(match);
-    console.log(await this.getMatch(match.getRoomId()));
     return match;
   }
 
@@ -50,13 +49,13 @@ export class MatchService {
   }
 
   async disconnectUser(userId: string, roomId: string): Promise<Match> {
-    const match = await this.cache.get<Match>(CacheKeys.match(roomId));
+    const match = await this.getMatch(CacheKeys.match(roomId));
     if (!match) {
       throw new MatchNotFoundError(roomId);
     }
 
     match.disconnectPlayer(userId);
-    await this.cache.set(CacheKeys.match(roomId), match);
+    await this.saveMatch(match);
 
     return match;
   }
@@ -79,7 +78,7 @@ export class MatchService {
       throw new MatchNotFoundError(roomId);
     }
 
-    return match;
+    return Match.fromPersistence(match);
   }
 
   async nextQuestion(roomId: string): Promise<QuestionDto | null> {
@@ -105,11 +104,6 @@ export class MatchService {
   }
 
   private async saveMatch(match: Match): Promise<void> {
-    console.log((match.calculateMatchTimeout() + 30) * 1000);
-    return await this.cache.set(
-      CacheKeys.match(match.getRoomId()),
-      match.toPersistence(),
-      (match.calculateMatchTimeout() + 30) * 1000,
-    );
+    return await this.cache.set(CacheKeys.match(match.getRoomId()), match.toPersistence(), 3600000); // todo: implement definition of ttl
   }
 }
