@@ -7,7 +7,7 @@ import {
   OnGatewayConnection,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import { Server } from 'socket.io';
 import { User } from 'src/db/entities';
 import { Repository } from 'typeorm';
@@ -19,6 +19,7 @@ import { Match } from './match/domain/match.entity';
 import { MatchStatus, QuestionDto } from './match/domain/match.interface';
 import { OnEvent } from '@nestjs/event-emitter';
 import { WsAuthService } from 'src/common/src/ws-auth/ws-auth.service';
+import { GameService } from './game.service';
 
 @WebSocketGateway({
   namespace: '/game',
@@ -30,13 +31,14 @@ import { WsAuthService } from 'src/common/src/ws-auth/ws-auth.service';
   transports: ['websocket', 'polling'],
 })
 export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
-  @WebSocketServer() server: Server;
+  @WebSocketServer() server!: Server;
 
   constructor(
     private readonly matchService: MatchService,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
     private readonly wsAuthService: WsAuthService,
+    private readonly gameService: GameService,
   ) {}
 
   async handleConnection(
@@ -123,7 +125,12 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     );
     match.addPlayer(user.id);
 
+    console.log('roomId del match:', match.getRoomId());
+    console.log('rooms antes del join:', [...client.rooms]);
+
     await client.join(match.getRoomId());
+
+    console.log('rooms después del join:', [...client.rooms]);
     client.data.roomId = match.getRoomId();
 
     console.log(`Usuario ${user.id} se ha unido al juego`);
@@ -216,19 +223,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       throw new BadRequestException('missing roomId');
     }
 
-    const match = await this.matchService.getMatch(client.data.roomId);
-
-    if (match.getOwner().id != user.id) {
-      throw new UnauthorizedException(
-        'you cannot start the partina because you are not the creator of the game',
-      );
-    }
-
-    if (match.getStatus() != MatchStatus.WAITING) {
-      throw new BadRequestException('The game has already started.');
-    }
-
-    match.startMatchPreparation();
+    await this.gameService.start(client.data.roomId, user.id);
 
     return { success: true };
   }
@@ -247,11 +242,39 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     return { success: true };
   }
-    */
-
+*/
   @OnEvent('game.next-question')
-  handleNextQuestion(payload: { matchId: string; question: QuestionDto }) {
-    console.log('pregunta enviada');
-    this.server.to(payload.matchId).emit('new-question', payload.question);
+  handleNextQuestion(payload: { roomId: string; question: QuestionDto }) {
+    console.log('server esta init', this.server);
+
+    console.log('pregunta enviada a:', payload.roomId);
+
+    // Ver todos los rooms activos
+    this.server.sockets.adapter.rooms.forEach((sockets, roomId) => {
+      console.log(`room "${roomId}":`, [...sockets]);
+    });
+
+    // Ver específicamente el room del payload
+    const room = this.server.sockets.adapter.rooms.get(payload.roomId);
+    console.log('sockets en el room target:', room ? [...room] : 'VACÍO O NO EXISTE');
+
+    this.server.to(payload.roomId).emit('new-question', payload.question);
   }
+
+  /*
+  handleNextQuestion(roomId: string, question: QuestionDto) {
+    console.log('server esta init', this.server);
+
+    // Ver todos los rooms activos
+    this.server.sockets.adapter.rooms.forEach((sockets, roomId) => {
+      console.log(`room "${roomId}":`, [...sockets]);
+    });
+
+    // Ver específicamente el room del payload
+    const room = this.server.sockets.adapter.rooms.get(roomId);
+    console.log('sockets en el room target:', room ? [...room] : 'VACÍO O NO EXISTE');
+
+    this.server.to(roomId).emit('new-question', question);
+  }
+      */
 }

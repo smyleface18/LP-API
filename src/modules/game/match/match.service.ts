@@ -1,5 +1,5 @@
-import { ModeMatch, QuestionDto } from './domain/match.interface';
-import { Injectable } from '@nestjs/common';
+import { MatchStatus, ModeMatch, QuestionDto } from './domain/match.interface';
+import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Match } from './domain/match.entity';
 import { CacheService } from 'src/common/src/cache/cache.service';
 import { Level } from 'src/db/enum/question.enum';
@@ -9,6 +9,7 @@ import { MatchNotFoundError } from './domain/exceptions/match-not-found.error';
 import { UniqueNamesAdapter } from 'src/common/src/unique-names/unique-names.adapter';
 import { v4 } from 'uuid';
 import { User } from 'src/db/entities';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 
 @Injectable()
 export class MatchService {
@@ -16,6 +17,7 @@ export class MatchService {
     private readonly cache: CacheService,
     private readonly questionService: QuestionService,
     private readonly uniqueNames: UniqueNamesAdapter,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async createMatch(difficulty: Level, mode: ModeMatch, owner: User): Promise<Match> {
@@ -88,19 +90,43 @@ export class MatchService {
       return null;
     }
 
-    return this.questionService.toQuestionDto(question);
-  }
-
-  async startMatch(roomId: string): Promise<QuestionDto | null> {
-    const match = await this.getMatch(roomId);
-    match.startMatchPreparation();
-
-    const question = match.sendNextQuestion();
-    if (!question) {
+    const nextQuestion = match.getNexQuestion();
+    console.log('XXXXXXXXXXXXXXXXXXXXXXX otra pregunta?', nextQuestion);
+    if (!nextQuestion) {
       return null;
     }
 
+    this.eventEmitter.emit('question.started', {
+      roomId: match.getRoomId(),
+      timeLimit: nextQuestion.timeLimit,
+    });
+
+    await this.saveMatch(match);
+
     return this.questionService.toQuestionDto(question);
+  }
+
+  async startMatch(roomId: string, userId: string): Promise<void> {
+    const match = await this.getMatch(roomId);
+
+    const question = match.sendNextQuestion();
+    if (!question) {
+      return;
+    }
+
+    if (match.getOwner().id != userId) {
+      throw new UnauthorizedException(
+        'you cannot start the partina because you are not the creator of the game',
+      );
+    }
+
+    if (match.getStatus() != MatchStatus.WAITING) {
+      throw new BadRequestException('The game has already started.');
+    }
+
+    match.startMatchPreparation();
+
+    await this.saveMatch(match);
   }
 
   private async saveMatch(match: Match): Promise<void> {

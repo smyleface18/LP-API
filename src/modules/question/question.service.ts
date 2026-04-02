@@ -52,7 +52,6 @@ export class QuestionService {
       .orderBy('RANDOM()')
       .limit(limit)
       .getMany();
-    console.log(questions[0]);
     console.log(`${questions.length} preguntas seleccionadas aleatoriamente`);
 
     return questions;

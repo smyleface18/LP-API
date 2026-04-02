@@ -1,11 +1,11 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable } from '@nestjs/common';
-import { Queue, QueueEvents } from 'bullmq';
+import { Queue } from 'bullmq';
 import { TimeoutDto } from '../types';
+import { OnEvent } from '@nestjs/event-emitter';
 
 @Injectable()
 export class GameTimeoutQueue {
-  private readonly queueEvents: QueueEvents;
   constructor(
     @InjectQueue('game-question-timeout')
     private readonly queue: Queue,
@@ -19,9 +19,17 @@ export class GameTimeoutQueue {
         roomId: timeoutDto.roomId,
       },
       {
-        delay: timeoutDto.timeLimit * 1000,
+        delay: timeoutDto.timeLimit,
         removeOnComplete: true,
       },
     );
+  }
+
+  @OnEvent('question.started')
+  async handleQuestionStarted(payload: { roomId: string; timeLimit: number }) {
+    await this.scheduleNextQuestion({
+      roomId: payload.roomId,
+      timeLimit: payload.timeLimit,
+    });
   }
 }

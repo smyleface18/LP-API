@@ -9,11 +9,17 @@ export class GameService {
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
+  async start(roomId: string, userId: string) {
+    await this.matchService.startMatch(roomId, userId);
+
+    await this.handleQuestionTimeout(roomId);
+  }
+
   async handleQuestionTimeout(roomId: string) {
     //this.matchService.processAnswers(roomId);
 
     const question = await this.matchService.nextQuestion(roomId);
-    console.log('send question', question);
+
     this.eventEmitter.emit('game.next-question', {
       roomId,
       question,

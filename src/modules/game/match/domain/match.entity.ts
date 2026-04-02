@@ -121,6 +121,17 @@ export class Match {
     return this.questions.reduce((acc, question) => acc + question.timeLimit, 0);
   }
 
+  getNexQuestion(): Question | null {
+    if (this.currentQuestionIndex >= this.questions.length) {
+      this.status = MatchStatus.FINISHED;
+      return null;
+    }
+
+    const question = this.questions[this.currentQuestionIndex];
+
+    return question;
+  }
+
   toPersistence(): any {
     return {
       roomId: this.roomId,
@@ -157,6 +168,8 @@ export class Match {
       MatchStatus.FINISHED,
       MatchStatus.BETWEEN_QUESTIONS,
       MatchStatus.PROCESSING,
+      MatchStatus.PREPARING,
+      MatchStatus.STARTING,
     ];
     if (!allowedStatus.includes(snapshot.status as MatchStatus)) {
       throw new Error('Invalid match snapshot: status');
