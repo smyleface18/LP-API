@@ -51,7 +51,7 @@ export class MatchService {
   }
 
   async disconnectUser(userId: string, roomId: string): Promise<Match> {
-    const match = await this.getMatch(CacheKeys.match(roomId));
+    const match = await this.getMatch(roomId);
     if (!match) {
       throw new MatchNotFoundError(roomId);
     }
@@ -91,15 +91,12 @@ export class MatchService {
     }
 
     const nextQuestion = match.getNexQuestion();
-    console.log('XXXXXXXXXXXXXXXXXXXXXXX otra pregunta?', nextQuestion);
-    if (!nextQuestion) {
-      return null;
+    if (nextQuestion) {
+      this.eventEmitter.emit('question.started', {
+        roomId: match.getRoomId(),
+        timeLimit: nextQuestion.timeLimit,
+      });
     }
-
-    this.eventEmitter.emit('question.started', {
-      roomId: match.getRoomId(),
-      timeLimit: nextQuestion.timeLimit,
-    });
 
     await this.saveMatch(match);
 
@@ -108,11 +105,6 @@ export class MatchService {
 
   async startMatch(roomId: string, userId: string): Promise<void> {
     const match = await this.getMatch(roomId);
-
-    const question = match.sendNextQuestion();
-    if (!question) {
-      return;
-    }
 
     if (match.getOwner().id != userId) {
       throw new UnauthorizedException(

@@ -245,36 +245,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 */
   @OnEvent('game.next-question')
   handleNextQuestion(payload: { roomId: string; question: QuestionDto }) {
-    console.log('server esta init', this.server);
-
     console.log('pregunta enviada a:', payload.roomId);
-
-    // Ver todos los rooms activos
-    this.server.sockets.adapter.rooms.forEach((sockets, roomId) => {
-      console.log(`room "${roomId}":`, [...sockets]);
-    });
-
-    // Ver específicamente el room del payload
-    const room = this.server.sockets.adapter.rooms.get(payload.roomId);
-    console.log('sockets en el room target:', room ? [...room] : 'VACÍO O NO EXISTE');
 
     this.server.to(payload.roomId).emit('new-question', payload.question);
   }
-
-  /*
-  handleNextQuestion(roomId: string, question: QuestionDto) {
-    console.log('server esta init', this.server);
-
-    // Ver todos los rooms activos
-    this.server.sockets.adapter.rooms.forEach((sockets, roomId) => {
-      console.log(`room "${roomId}":`, [...sockets]);
-    });
-
-    // Ver específicamente el room del payload
-    const room = this.server.sockets.adapter.rooms.get(roomId);
-    console.log('sockets en el room target:', room ? [...room] : 'VACÍO O NO EXISTE');
-
-    this.server.to(roomId).emit('new-question', question);
-  }
-      */
 }

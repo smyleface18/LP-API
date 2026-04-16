@@ -122,7 +122,7 @@ export class Match {
   }
 
   getNexQuestion(): Question | null {
-    if (this.currentQuestionIndex >= this.questions.length) {
+    if (this.currentQuestionIndex > this.questions.length) {
       this.status = MatchStatus.FINISHED;
       return null;
     }
