@@ -20,6 +20,7 @@ export class GameTimeoutQueue {
         roomId: timeoutDto.roomId,
       },
       {
+        jobId: `end-question-roomId-${timeoutDto.roomId}-+${Date.now()}`,
         delay: timeoutDto.timeLimit,
         removeOnComplete: true,
         removeOnFail: true,
@@ -35,6 +36,7 @@ export class GameTimeoutQueue {
         roomId: payload.roomId,
       },
       {
+        jobId: `start-question-roomId-${payload.roomId}-+${Date.now()}`,
         delay: payload.delay,
         removeOnComplete: true,
         removeOnFail: true,

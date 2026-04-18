@@ -65,13 +65,13 @@ export class Match {
 
   sendNextQuestion(): Question | null {
     if (this.currentQuestionIndex >= this.questions.length) {
-      this.status = MatchStatus.FINISHED;
+      this.setStatus(MatchStatus.FINISHED);
       return null;
     }
 
     const question = this.questions[this.currentQuestionIndex];
     this.currentQuestionIndex++;
-    this.status = MatchStatus.QUESTION_ACTIVE;
+    this.setStatus(MatchStatus.QUESTION_ACTIVE);
 
     return question;
   }
@@ -85,11 +85,11 @@ export class Match {
 
   finishCurrentQuestion() {
     if (this.status === MatchStatus.QUESTION_ACTIVE) {
-      this.status = MatchStatus.BETWEEN_QUESTIONS;
+      this.setStatus(MatchStatus.BETWEEN_QUESTIONS);
     }
 
     if (this.currentQuestionIndex >= this.questions.length) {
-      this.status = MatchStatus.FINISHED;
+      this.setStatus(MatchStatus.FINISHED);
     }
   }
 
@@ -127,7 +127,7 @@ export class Match {
   }
 
   startMatchPreparation() {
-    this.status = MatchStatus.PREPARING;
+    this.setStatus(MatchStatus.PREPARING);
   }
 
   getcurrentQuestionIndex() {
@@ -140,7 +140,7 @@ export class Match {
 
   getNexQuestion(): Question | null {
     if (this.currentQuestionIndex >= this.questions.length) {
-      this.status = MatchStatus.FINISHED;
+      this.setStatus(MatchStatus.FINISHED);
       return null;
     }
 
@@ -162,12 +162,13 @@ export class Match {
   }
 
   isRoomEmpty(): boolean {
-    this.players.forEach((player) => {
-      if (player.isConnected) {
-        return false;
-      }
-    });
-    return true;
+    const hasConnected = Array.from(this.players.values()).some((player) => player.isConnected);
+
+    return !hasConnected;
+  }
+
+  setStatus(status: MatchStatus) {
+    this.status = status;
   }
 
   static fromPersistence(data: unknown): Match {
@@ -230,7 +231,7 @@ export class Match {
     );
 
     // Restaurar estado
-    match.status = snapshot.status as MatchStatus;
+    match.setStatus(snapshot.status as MatchStatus);
     match.currentQuestionIndex = snapshot.currentQuestionIndex;
 
     // Reconstruir Map de players

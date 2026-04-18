@@ -59,10 +59,6 @@ export class MatchService {
     match.disconnectPlayer(userId);
     await this.saveMatch(match);
 
-    if (match.isRoomEmpty()) {
-      await this.cache.delete(CacheKeys.match(roomId));
-    }
-
     return match;
   }
 
@@ -89,6 +85,13 @@ export class MatchService {
   async nextQuestion(roomId: string): Promise<QuestionDto | null> {
     const match = await this.getMatch(roomId);
     const question = match.sendNextQuestion();
+
+    if (match.isRoomEmpty()) {
+      this.eventEmitter.emit('game.finished', {
+        roomId,
+      });
+      return null;
+    }
 
     if (question) {
       this.eventEmitter.emit('question.started', {
@@ -138,6 +141,6 @@ export class MatchService {
     await this.saveMatch(match);
   }
   private async saveMatch(match: Match): Promise<void> {
-    return await this.cache.set(CacheKeys.match(match.getRoomId()), match.toPersistence(), 3600000); // todo: implement definition of ttl
+    return await this.cache.set(CacheKeys.match(match.getRoomId()), match.toPersistence(), 900000); // todo: implement definition of ttl by now is 15 minutes
   }
 }
