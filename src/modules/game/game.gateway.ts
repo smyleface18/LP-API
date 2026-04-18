@@ -200,7 +200,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       correctAnswer: match.getQuestionById(data.questionId).options.filter((op) => op.isCorrect),
     });
 
-    match.addScore(userId, answer?.isCorrect ? 100 : 0);
+    await this.matchService.addScore(roomId, userId, answer?.isCorrect ? 100 : 0);
 
     return { received: true };
   }
@@ -266,7 +266,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @OnEvent('game.finished')
   handleGameFinished(payload: { roomId: string; results: any[] }) {
-    this.server.to(payload.roomId).emit('gameEnded', { results: 0 });
+    this.server.to(payload.roomId).emit('gameEnded', { results: payload.results });
     this.server.in(payload.roomId).socketsLeave(payload.roomId);
   }
 }

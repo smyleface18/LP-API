@@ -25,6 +25,7 @@ export class Match {
     this.questions = questions;
     this.owner = owner;
     this.mode = mode;
+    this.addPlayer(owner.id);
   }
 
   getRoomId(): string {
@@ -97,10 +98,13 @@ export class Match {
   }
 
   getResults() {
-    return Array.from(this.players.values()).map((p) => ({
+    const results = Array.from(this.players.values()).map((p) => ({
       userId: p.userId,
       score: p.score,
     }));
+    console.log('Resultados calculados:', this.players);
+    console.log('Resultados calculados:', results);
+    return results;
   }
 
   getStatus() {

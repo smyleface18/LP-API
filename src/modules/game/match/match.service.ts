@@ -129,6 +129,11 @@ export class MatchService {
     return match.hasNextQuestion();
   }
 
+  async addScore(roomId: string, userId: string, points: number): Promise<void> {
+    const match = await this.getMatch(roomId);
+    match.addScore(userId, points);
+    await this.saveMatch(match);
+  }
   private async saveMatch(match: Match): Promise<void> {
     return await this.cache.set(CacheKeys.match(match.getRoomId()), match.toPersistence(), 3600000); // todo: implement definition of ttl
   }

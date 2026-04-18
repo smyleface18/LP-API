@@ -36,6 +36,5 @@ export class GameTimeoutProcessor extends WorkerHost {
     console.error(`Job falló: ${job.id}`);
     console.error(job.failedReason);
     console.error(job.stacktrace);
-    console.error(job.returnvalue);
   }
 }
