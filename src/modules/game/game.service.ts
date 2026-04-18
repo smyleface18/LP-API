@@ -11,18 +11,51 @@ export class GameService {
 
   async start(roomId: string, userId: string) {
     await this.matchService.startMatch(roomId, userId);
-
-    await this.handleQuestionTimeout(roomId);
+    this.eventEmitter.emit('game.starting', {
+      roomId,
+      delay: 2000,
+    });
   }
 
-  async handleQuestionTimeout(roomId: string) {
-    //this.matchService.processAnswers(roomId);
-
+  async startQuestion(roomId: string) {
     const question = await this.matchService.nextQuestion(roomId);
+    if (!question) {
+      await this.finishMatch(roomId);
+      return;
+    }
+
+    const match = await this.matchService.getMatch(roomId);
 
     this.eventEmitter.emit('game.next-question', {
       roomId,
       question,
+      questionNumber: match.getcurrentQuestionIndex(),
+      totalQuestions: match.getQuestions().length,
+      timeLimit: question.timeLimit,
+    });
+  }
+
+  async handleQuestionTimeout(roomId: string) {
+    await this.matchService.finishCurrentQuestion(roomId);
+
+    const hasNextQuestion = await this.matchService.hasNextQuestion(roomId);
+    if (!hasNextQuestion) {
+      await this.finishMatch(roomId);
+      return;
+    }
+
+    this.eventEmitter.emit('game.question-ended', {
+      roomId,
+      delay: 2000,
+    });
+  }
+
+  async finishMatch(roomId: string) {
+    console.log(`Finalizando partida en roomId: ${roomId}`);
+    const results = await this.matchService.finishMatch(roomId);
+    this.eventEmitter.emit('game.finished', {
+      roomId,
+      results,
     });
   }
 }

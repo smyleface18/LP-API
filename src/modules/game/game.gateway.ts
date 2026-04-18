@@ -200,9 +200,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       correctAnswer: match.getQuestionById(data.questionId).options.filter((op) => op.isCorrect),
     });
 
-    console.log(
-      `Usuario ${userId} respondió ${answer?.isCorrect ? 'correctamente' : 'incorrectamente'}`,
-    );
+    match.addScore(userId, answer?.isCorrect ? 100 : 0);
 
     return { received: true };
   }
@@ -244,9 +242,31 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 */
   @OnEvent('game.next-question')
-  handleNextQuestion(payload: { roomId: string; question: QuestionDto }) {
+  handleNextQuestion(payload: {
+    roomId: string;
+    question: QuestionDto;
+    questionNumber: number;
+    totalQuestions: number;
+    timeLimit: number;
+  }) {
     console.log('pregunta enviada a:', payload.roomId);
 
-    this.server.to(payload.roomId).emit('new-question', payload.question);
+    this.server.to(payload.roomId).emit('newQuestion', {
+      question: payload.question,
+      questionNumber: payload.questionNumber,
+      totalQuestions: payload.totalQuestions,
+      timeLimit: payload.timeLimit,
+    });
+  }
+
+  @OnEvent('game.question-ended')
+  handleQuestionEnded(payload: { roomId: string }) {
+    this.server.to(payload.roomId).emit('questionEnded');
+  }
+
+  @OnEvent('game.finished')
+  handleGameFinished(payload: { roomId: string; results: any[] }) {
+    this.server.to(payload.roomId).emit('gameEnded', { results: 0 });
+    this.server.in(payload.roomId).socketsLeave(payload.roomId);
   }
 }

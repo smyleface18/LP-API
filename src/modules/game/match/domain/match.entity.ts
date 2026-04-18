@@ -70,6 +70,7 @@ export class Match {
 
     const question = this.questions[this.currentQuestionIndex];
     this.currentQuestionIndex++;
+    this.status = MatchStatus.QUESTION_ACTIVE;
 
     return question;
   }
@@ -79,6 +80,20 @@ export class Match {
     if (player) {
       player.score += points;
     }
+  }
+
+  finishCurrentQuestion() {
+    if (this.status === MatchStatus.QUESTION_ACTIVE) {
+      this.status = MatchStatus.BETWEEN_QUESTIONS;
+    }
+
+    if (this.currentQuestionIndex >= this.questions.length) {
+      this.status = MatchStatus.FINISHED;
+    }
+  }
+
+  hasNextQuestion(): boolean {
+    return this.currentQuestionIndex < this.questions.length;
   }
 
   getResults() {
@@ -122,7 +137,7 @@ export class Match {
   }
 
   getNexQuestion(): Question | null {
-    if (this.currentQuestionIndex > this.questions.length) {
+    if (this.currentQuestionIndex >= this.questions.length) {
       this.status = MatchStatus.FINISHED;
       return null;
     }

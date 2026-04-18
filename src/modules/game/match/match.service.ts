@@ -63,7 +63,7 @@ export class MatchService {
   }
 
   async finishMatch(roomId: string) {
-    const match = await this.cache.get<Match>(roomId);
+    const match = await this.getMatch(roomId);
     if (!match) {
       throw new MatchNotFoundError(roomId);
     }
@@ -86,21 +86,17 @@ export class MatchService {
   async nextQuestion(roomId: string): Promise<QuestionDto | null> {
     const match = await this.getMatch(roomId);
     const question = match.sendNextQuestion();
-    if (!question) {
-      return null;
-    }
 
-    const nextQuestion = match.getNexQuestion();
-    if (nextQuestion) {
+    if (question) {
       this.eventEmitter.emit('question.started', {
         roomId: match.getRoomId(),
-        timeLimit: nextQuestion.timeLimit,
+        timeLimit: question.timeLimit,
       });
     }
 
     await this.saveMatch(match);
 
-    return this.questionService.toQuestionDto(question);
+    return question ? this.questionService.toQuestionDto(question) : null;
   }
 
   async startMatch(roomId: string, userId: string): Promise<void> {
@@ -119,6 +115,18 @@ export class MatchService {
     match.startMatchPreparation();
 
     await this.saveMatch(match);
+  }
+
+  async finishCurrentQuestion(roomId: string): Promise<Match> {
+    const match = await this.getMatch(roomId);
+    match.finishCurrentQuestion();
+    await this.saveMatch(match);
+    return match;
+  }
+
+  async hasNextQuestion(roomId: string): Promise<boolean> {
+    const match = await this.getMatch(roomId);
+    return match.hasNextQuestion();
   }
 
   private async saveMatch(match: Match): Promise<void> {

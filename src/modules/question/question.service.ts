@@ -3,7 +3,7 @@ import { CreateQuestionDto } from './dto/create-question.dto';
 import { UpdateQuestionDto } from './dto/update-question.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Question } from 'src/db/entities';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Level } from 'src/db/enum/question.enum';
 import { QuestionDto } from '../game/match/domain/match.interface';
 
@@ -44,20 +44,40 @@ export class QuestionService {
   }
 
   async getRandomQuestions(difficulty: Level = Level.A1, limit: number = 10): Promise<Question[]> {
-    const questions = await this.repo
+    // 1️⃣ Obtener IDs aleatorios de preguntas (SIN options)
+    const randomQuestions = await this.repo
       .createQueryBuilder('question')
-      .innerJoinAndSelect('question.category', 'category')
-      .leftJoinAndSelect('question.options', 'options')
+      .innerJoin('question.category', 'category')
       .where('category.level = :difficulty', { difficulty })
+      .select('question.id')
       .orderBy('RANDOM()')
       .limit(limit)
       .getMany();
+
+    const ids = randomQuestions.map((q) => q.id);
+
+    if (ids.length === 0) return [];
+
+    // 2️⃣ Cargar preguntas con TODAS sus relaciones completas
+    const questions = await this.repo.find({
+      where: { id: In(ids) },
+      relations: ['category', 'options'],
+    });
+
     console.log(`${questions.length} preguntas seleccionadas aleatoriamente`);
 
     return questions;
   }
 
   toQuestionDto(question: Question): QuestionDto {
+    const options =
+      question.options?.map((option) => ({
+        id: option.id,
+        optionText: option.text,
+        optionMedia: option.media,
+        isCorrect: option.isCorrect,
+      })) || [];
+
     return {
       id: question.id,
       active: question.active,
@@ -68,12 +88,7 @@ export class QuestionService {
       categoryId: question.categoryId,
       timeLimit: question.timeLimit,
       media: question.media,
-      options:
-        question.options?.map((option) => ({
-          id: option.id,
-          text: option.text,
-          media: option.media,
-        })) || [],
+      options: options,
     };
   }
 }
