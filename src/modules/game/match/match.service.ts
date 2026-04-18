@@ -59,6 +59,10 @@ export class MatchService {
     match.disconnectPlayer(userId);
     await this.saveMatch(match);
 
+    if (match.isRoomEmpty()) {
+      await this.cache.delete(CacheKeys.match(roomId));
+    }
+
     return match;
   }
 
@@ -69,7 +73,6 @@ export class MatchService {
     }
 
     const results = match.getResults();
-    await this.cache.delete(CacheKeys.match(roomId));
 
     return results;
   }

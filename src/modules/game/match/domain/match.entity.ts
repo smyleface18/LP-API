@@ -102,8 +102,6 @@ export class Match {
       userId: p.userId,
       score: p.score,
     }));
-    console.log('Resultados calculados:', this.players);
-    console.log('Resultados calculados:', results);
     return results;
   }
 
@@ -161,6 +159,15 @@ export class Match {
       questions: this.questions,
       owner: this.owner,
     };
+  }
+
+  isRoomEmpty(): boolean {
+    this.players.forEach((player) => {
+      if (player.isConnected) {
+        return false;
+      }
+    });
+    return true;
   }
 
   static fromPersistence(data: unknown): Match {

@@ -79,9 +79,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     };
   }
 
-  async handleDisconnect(
-    @ConnectedSocket() client: ConnectionGameSocket,
-  ): Promise<ApiResponse<null>> {
+  handleDisconnect(@ConnectedSocket() client: ConnectionGameSocket): ApiResponse<null> {
     const userId = client.data.userId;
     const roomId = client.data.roomId;
 
@@ -92,8 +90,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         message: 'user desconeted of game',
       };
     }
-
-    await this.matchService.disconnectUser(userId, roomId);
 
     console.log(`user desconeted : ${userId}`);
     return {
@@ -206,7 +202,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('startGame')
-  async handleStopGame(@ConnectedSocket() client: ConnectionGameSocket) {
+  async handleStartGame(@ConnectedSocket() client: ConnectionGameSocket) {
     const user = await this.userRepository.findOne({
       where: {
         id: client.data.userId,
@@ -226,21 +222,24 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return { success: true };
   }
 
-  /*
-  @SubscribeMessage('stopGame')
-  handleStopGame(@ConnectedSocket() client: Socket) {
-    const userId = this.connectedUsers.get(client.id);
-    if (!userId) return;
+  @SubscribeMessage('leaveRoom')
+  async handleLeaveRoom(@ConnectedSocket() client: ConnectionGameSocket) {
+    const userId = client.data.userId;
+    const roomId = client.data.roomId;
 
-    const userGame = this.userGames.get(userId);
-    if (userGame?.timeout) clearTimeout(userGame.timeout);
+    if (!userId || !roomId) {
+      throw new BadRequestException('missing userId or roomId');
+    }
 
-    this.server.to(userId).emit('gameStopped');
-    console.log(`Juego detenido manualmente para ${userId}`);
+    await this.matchService.disconnectUser(userId, roomId);
+
+    await client.leave(roomId);
+    console.log(`Usuario ${userId} ha abandonado la sala ${roomId}`);
+    client.data.roomId = undefined;
 
     return { success: true };
   }
-*/
+
   @OnEvent('game.next-question')
   handleNextQuestion(payload: {
     roomId: string;
