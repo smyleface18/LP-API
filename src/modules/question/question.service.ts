@@ -44,7 +44,6 @@ export class QuestionService {
   }
 
   async getRandomQuestions(difficulty: Level = Level.A1, limit: number = 10): Promise<Question[]> {
-    // 1️⃣ Obtener IDs aleatorios de preguntas (SIN options)
     const randomQuestions = await this.repo
       .createQueryBuilder('question')
       .innerJoin('question.category', 'category')
@@ -54,24 +53,21 @@ export class QuestionService {
       .limit(limit)
       .getMany();
 
-    const ids = randomQuestions.map((q) => q.id);
+    const ids = this.shuffle(randomQuestions.map((q) => q.id));
 
     if (ids.length === 0) return [];
 
-    // 2️⃣ Cargar preguntas con TODAS sus relaciones completas
     const questions = await this.repo.find({
       where: { id: In(ids) },
       relations: ['category', 'options'],
     });
 
-    console.log(`${questions.length} preguntas seleccionadas aleatoriamente`);
-
-    return questions;
+    return this.shuffle(questions);
   }
 
   toQuestionDto(question: Question): QuestionDto {
     const options =
-      question.options?.map((option) => ({
+      this.shuffle(question.options).map((option) => ({
         id: option.id,
         optionText: option.text,
         optionMedia: option.media,
@@ -90,5 +86,12 @@ export class QuestionService {
       media: question.media,
       options: options,
     };
+  }
+
+  private shuffle<T>(array: T[]): T[] {
+    return array
+      .map((value) => ({ value, sort: Math.random() }))
+      .sort((a, b) => a.sort - b.sort)
+      .map(({ value }) => value);
   }
 }
