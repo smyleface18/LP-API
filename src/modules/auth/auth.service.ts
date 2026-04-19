@@ -113,7 +113,7 @@ export class AuthService {
         AuthFlow: 'REFRESH_TOKEN_AUTH',
         ClientId: this.clientId,
         AuthParameters: {
-          refreshToken: refreshToken,
+          REFRESH_TOKEN: refreshToken,
         },
       });
 

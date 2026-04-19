@@ -21,7 +21,7 @@ export class AuthController {
   }
 
   @Post('/refresh-token')
-  async refreshToken(@Body() refreshToken: string) {
+  async refreshToken(@Body('refreshToken') refreshToken: string) {
     return this.authService.refreshToken(refreshToken);
   }
 
@@ -33,7 +33,7 @@ export class AuthController {
 
   @UseGuards(JwtAuthGuard)
   @Post('/revoke-token')
-  async revokeToken(@Body() refreshToken: string) {
+  async revokeToken(@Body('refreshToken') refreshToken: string) {
     return this.authService.revokeToken(refreshToken);
   }
 }
