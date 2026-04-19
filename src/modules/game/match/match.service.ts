@@ -41,10 +41,16 @@ export class MatchService {
     return match;
   }
 
-  async joinMatch(roomId: string, userId: string): Promise<Match> {
+  async joinMatch(
+    roomId: string,
+    userId: string,
+    username: string = 'Anonymous',
+    level: Level = Level.A1,
+    avatar?: string,
+  ): Promise<Match> {
     const match = await this.getMatch(roomId);
 
-    match.addPlayer(userId);
+    match.addPlayer(userId, username, level, avatar);
     await this.saveMatch(match);
 
     return match;

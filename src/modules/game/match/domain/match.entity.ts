@@ -25,17 +25,29 @@ export class Match {
     this.questions = questions;
     this.owner = owner;
     this.mode = mode;
-    this.addPlayer(owner.id);
+    this.addPlayer(owner.id, owner.username, owner.level, owner.avatar?.url);
   }
 
   getRoomId(): string {
     return this.roomId;
   }
-  addPlayer(userId: string) {
+
+  getDifficulty(): Level {
+    return this.difficulty;
+  }
+
+  getMode(): ModeMatch {
+    return this.mode;
+  }
+
+  addPlayer(userId: string, username: string = 'Anonymous', level: Level, avatar?: string) {
     if (this.players.has(userId)) return;
 
     this.players.set(userId, {
       userId: userId,
+      username: username,
+      avatar: avatar,
+      level: level,
       score: 0,
       isConnected: true,
     });
@@ -61,6 +73,14 @@ export class Match {
 
   getPlayersCount(): number {
     return this.players.size;
+  }
+
+  getPlayers(): string[] {
+    return Array.from(this.players.keys());
+  }
+
+  getPlayersWithInfo(): PlayerState[] {
+    return Array.from(this.players.values());
   }
 
   sendNextQuestion(): Question | null {
@@ -153,6 +173,7 @@ export class Match {
     return {
       roomId: this.roomId,
       difficulty: this.difficulty,
+      mode: this.mode,
       status: this.status,
       currentQuestionIndex: this.currentQuestionIndex,
       players: Array.from(this.players.entries()),

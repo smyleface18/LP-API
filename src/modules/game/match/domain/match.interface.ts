@@ -4,6 +4,9 @@ import { Level } from 'src/db/enum/question.enum';
 
 export interface PlayerState {
   userId: string;
+  username: string;
+  avatar?: string;
+  level: Level;
   score: number;
   isConnected: boolean;
 }

@@ -15,7 +15,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { MatchService } from './match/match.service';
 import { ApiResponse } from 'src/common/src/api/api.type';
 import { ConnectionGameSocket, CreateGameDto, JoinGameDto } from './types';
-import { Match } from './match/domain/match.entity';
 import { MatchStatus, QuestionDto } from './match/domain/match.interface';
 import { OnEvent } from '@nestjs/event-emitter';
 import { WsAuthService } from 'src/common/src/ws-auth/ws-auth.service';
@@ -44,9 +43,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleConnection(
     @ConnectedSocket() client: ConnectionGameSocket,
   ): Promise<ApiResponse<null>> {
-    console.log('connection socket');
     const token = client.handshake.auth?.token as string;
-
+    console.log('Token recibido en conexión:', token);
     if (!token) {
       client.emit('error', { message: 'Token missing' });
       client.disconnect();
@@ -63,7 +61,12 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.data.userId = payload.username;
       client.data.role = payload['cognito:groups'] || [];
 
-      console.log('user connected:', payload.username);
+      console.log(
+        '[GameGateway] user connected - userId:',
+        client.data.userId,
+        '- username:',
+        payload.username,
+      );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error('Auth error:', errorMessage);
@@ -103,7 +106,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleCreateGame(
     @MessageBody() createGameDto: CreateGameDto,
     @ConnectedSocket() client: ConnectionGameSocket,
-  ): Promise<ApiResponse<Match>> {
+  ): Promise<ApiResponse<any>> {
     const user = await this.userRepository.findOne({
       where: {
         id: client.data.userId,
@@ -119,7 +122,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       createGameDto.modeMatch,
       user,
     );
-    match.addPlayer(user.id);
+    match.addPlayer(user.id, user.username, user.level, user.avatar?.url);
 
     console.log('roomId del match:', match.getRoomId());
     console.log('rooms antes del join:', [...client.rooms]);
@@ -129,10 +132,18 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     console.log('rooms después del join:', [...client.rooms]);
     client.data.roomId = match.getRoomId();
 
+    this.server.to(match.getRoomId()).emit('playersUpdated', {
+      players: match.getPlayersWithInfo(),
+    });
+
     console.log(`Usuario ${user.id} se ha unido al juego`);
     return {
       ok: true,
-      data: match,
+      data: {
+        roomId: match.getRoomId(),
+        level: match.getDifficulty(),
+        modeMatch: match.getMode(),
+      },
       message: 'match created',
     };
   }
@@ -141,7 +152,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleJoinGame(
     @MessageBody() joinGameDto: JoinGameDto,
     @ConnectedSocket() client: ConnectionGameSocket,
-  ): Promise<ApiResponse<Match>> {
+  ): Promise<ApiResponse<any>> {
     const user = await this.userRepository.findOne({
       where: {
         id: client.data.userId,
@@ -152,20 +163,38 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       throw new BadRequestException('user not found');
     }
 
-    const match = await this.matchService.joinMatch(joinGameDto.roomId, user.id);
+    const match = await this.matchService.getMatch(joinGameDto.roomId);
 
     if (match.getStatus() == MatchStatus.STARTING || match.getStatus() == MatchStatus.PREPARING) {
       throw new BadRequestException('The game has already started.');
     }
 
+    // joinMatch returns the updated match with the new player added
+    const updatedMatch = await this.matchService.joinMatch(
+      joinGameDto.roomId,
+      user.id,
+      user.username,
+      user.level,
+      user.avatar?.url,
+    );
+
     await client.join(joinGameDto.roomId);
     client.data.roomId = joinGameDto.roomId;
+
+    // Emit with the UPDATED match that includes the new player
+    this.server.to(joinGameDto.roomId).emit('playersUpdated', {
+      players: updatedMatch.getPlayersWithInfo(),
+    });
 
     console.log(`Usuario ${user.id} se ha unido al juego`);
 
     return {
       ok: true,
-      data: match,
+      data: {
+        roomId: updatedMatch.getRoomId(),
+        level: updatedMatch.getDifficulty(),
+        modeMatch: updatedMatch.getMode(),
+      },
       message: 'match join',
     };
   }
@@ -234,6 +263,12 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     await this.matchService.disconnectUser(userId, roomId);
 
     await client.leave(roomId);
+
+    const match = await this.matchService.getMatch(roomId);
+    this.server.to(roomId).emit('playersUpdated', {
+      players: match.getPlayersWithInfo(),
+    });
+
     console.log(`Usuario ${userId} ha abandonado la sala ${roomId}`);
     client.data.roomId = undefined;
 
@@ -248,7 +283,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     totalQuestions: number;
     timeLimit: number;
   }) {
-    console.log('pregunta enviada a:', payload.roomId);
+    console.log(`📋 [GameGateway] Sending question ${payload.questionNumber}/${payload.totalQuestions} to room ${payload.roomId}`);
 
     this.server.to(payload.roomId).emit('newQuestion', {
       question: payload.question,
@@ -260,11 +295,13 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @OnEvent('game.question-ended')
   handleQuestionEnded(payload: { roomId: string }) {
+    console.log(`⏱️ [GameGateway] Question ended for room ${payload.roomId}`);
     this.server.to(payload.roomId).emit('questionEnded');
   }
 
   @OnEvent('game.finished')
   handleGameFinished(payload: { roomId: string; results: any[] }) {
+    console.log(`🏁 [GameGateway] Game finished - room ${payload.roomId}, ${payload.results.length} players`);
     this.server.to(payload.roomId).emit('gameEnded', { results: payload.results });
     this.server.in(payload.roomId).socketsLeave(payload.roomId);
   }
