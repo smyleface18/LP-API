@@ -1,12 +1,12 @@
 import { Question, User } from 'src/db/entities';
-import { MatchStatus, ModeMatch, PlayerState } from './match.interface';
+import { MatchStatus, ModeMatch, PlayerInfo } from './match.interface';
 import { Level } from 'src/db/enum/question.enum';
 import { QuestionNotFoundError } from './exceptions/question-not-found.error';
 
 export class Match {
   private readonly roomId: string;
   private readonly owner: User;
-  private players = new Map<string, PlayerState>();
+  private players = new Map<string, PlayerInfo>();
   private currentQuestionIndex = 0;
   private status: MatchStatus = MatchStatus.WAITING;
   private readonly questions: Question[];
@@ -25,7 +25,7 @@ export class Match {
     this.questions = questions;
     this.owner = owner;
     this.mode = mode;
-    this.addPlayer(owner.id, owner.username, owner.level, owner.avatar?.url);
+    this.addPlayer(owner.id, owner.username, owner.level, owner.score, owner.avatar?.url, true);
   }
 
   getRoomId(): string {
@@ -40,16 +40,25 @@ export class Match {
     return this.mode;
   }
 
-  addPlayer(userId: string, username: string = 'Anonymous', level: Level, avatar?: string) {
+  addPlayer(
+    userId: string,
+    username: string = 'Anonymous',
+    level: Level,
+    totalScore: number = 0,
+    avatar?: string,
+    isOwner: boolean = false,
+  ) {
     if (this.players.has(userId)) return;
 
     this.players.set(userId, {
       userId: userId,
       username: username,
-      avatar: avatar,
       level: level,
-      score: 0,
+      matchScore: 0,
+      totalScore: totalScore,
       isConnected: true,
+      isOwner: isOwner,
+      avatar: avatar,
     });
   }
 
@@ -79,7 +88,7 @@ export class Match {
     return Array.from(this.players.keys());
   }
 
-  getPlayersWithInfo(): PlayerState[] {
+  getPlayersWithInfo(): PlayerInfo[] {
     return Array.from(this.players.values());
   }
 
@@ -99,7 +108,7 @@ export class Match {
   addScore(userId: string, points: number) {
     const player = this.players.get(userId);
     if (player) {
-      player.score += points;
+      player.matchScore += points;
     }
   }
 
@@ -120,7 +129,7 @@ export class Match {
   getResults() {
     const results = Array.from(this.players.values()).map((p) => ({
       userId: p.userId,
-      score: p.score,
+      score: p.matchScore,
     }));
     return results;
   }
@@ -256,7 +265,7 @@ export class Match {
     match.currentQuestionIndex = snapshot.currentQuestionIndex;
 
     // Reconstruir Map de players
-    const playersMap = new Map<string, PlayerState>();
+    const playersMap = new Map<string, PlayerInfo>();
 
     for (const entry of snapshot.players) {
       if (
@@ -268,8 +277,8 @@ export class Match {
         throw new Error('Invalid match snapshot: malformed player entry');
       }
 
-      const playerState = entry[1] as PlayerState;
-      playersMap.set(entry[0], playerState);
+      const playerInfo = entry[1] as PlayerInfo;
+      playersMap.set(entry[0], playerInfo);
     }
 
     match.players = playersMap;

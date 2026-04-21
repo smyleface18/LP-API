@@ -2,13 +2,15 @@ import { CategoryQuestion } from 'src/db/entities';
 import { S3Object } from 'src/db/entities/model.core';
 import { Level } from 'src/db/enum/question.enum';
 
-export interface PlayerState {
+export interface PlayerInfo {
   userId: string;
   username: string;
-  avatar?: string;
   level: Level;
-  score: number;
+  matchScore: number;
+  totalScore: number;
   isConnected: boolean;
+  isOwner: boolean;
+  avatar?: string;
 }
 
 export enum ModeMatch {
@@ -31,14 +33,25 @@ export interface MatchSnapshot {
   difficulty: Level;
   status: MatchStatus;
   currentQuestionIndex: number;
-  players: [string, PlayerState][];
+  players: [string, PlayerInfo][];
 }
 
-export interface OptionDto {
-  id: string;
-  text?: string;
-  media?: S3Object;
-}
+export type OptionDto =
+  | {
+      id: string;
+      text: string;
+      media?: undefined;
+    }
+  | {
+      id: string;
+      text?: undefined;
+      media: S3Object;
+    }
+  | {
+      id: string;
+      text: string;
+      media: S3Object;
+    };
 
 export interface QuestionDto {
   id: string;
@@ -51,4 +64,14 @@ export interface QuestionDto {
   categoryId: string;
   timeLimit: number;
   media?: S3Object;
+}
+
+export interface MatchDto {
+  roomId: string;
+  difficulty: Level;
+  mode: ModeMatch;
+  status: MatchStatus;
+  currentQuestionIndex: number;
+  players: PlayerInfo[];
+  questions: QuestionDto[];
 }

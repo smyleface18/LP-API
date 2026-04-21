@@ -122,7 +122,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       createGameDto.modeMatch,
       user,
     );
-    match.addPlayer(user.id, user.username, user.level, user.avatar?.url);
+    match.addPlayer(user.id, user.username, user.level, user.score, user.avatar?.url);
 
     console.log('roomId del match:', match.getRoomId());
     console.log('rooms antes del join:', [...client.rooms]);
@@ -175,6 +175,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       user.id,
       user.username,
       user.level,
+      user.score,
       user.avatar?.url,
     );
 
@@ -283,7 +284,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     totalQuestions: number;
     timeLimit: number;
   }) {
-    console.log(`📋 [GameGateway] Sending question ${payload.questionNumber}/${payload.totalQuestions} to room ${payload.roomId}`);
+    console.log(
+      `📋 [GameGateway] Sending question ${payload.questionNumber}/${payload.totalQuestions} to room ${payload.roomId}`,
+    );
 
     this.server.to(payload.roomId).emit('newQuestion', {
       question: payload.question,
@@ -301,7 +304,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @OnEvent('game.finished')
   handleGameFinished(payload: { roomId: string; results: any[] }) {
-    console.log(`🏁 [GameGateway] Game finished - room ${payload.roomId}, ${payload.results.length} players`);
     this.server.to(payload.roomId).emit('gameEnded', { results: payload.results });
     this.server.in(payload.roomId).socketsLeave(payload.roomId);
   }
