@@ -1,4 +1,4 @@
-import { MatchStatus, ModeMatch, QuestionDto } from './domain/match.interface';
+import { MatchDto, MatchStatus, ModeMatch, OptionDto, QuestionDto } from './domain/match.interface';
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Match } from './domain/match.entity';
 import { CacheService } from 'src/common/src/cache/cache.service';
@@ -8,7 +8,7 @@ import { CacheKeys } from 'src/common/src/cache/cache-key';
 import { MatchNotFoundError } from './domain/exceptions/match-not-found.error';
 import { UniqueNamesAdapter } from 'src/common/src/unique-names/unique-names.adapter';
 import { v4 } from 'uuid';
-import { User } from 'src/db/entities';
+import { Question, User } from 'src/db/entities';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
 @Injectable()
@@ -46,11 +46,12 @@ export class MatchService {
     userId: string,
     username: string = 'Anonymous',
     level: Level = Level.A1,
+    totalScore: number = 0,
     avatar?: string,
   ): Promise<Match> {
     const match = await this.getMatch(roomId);
 
-    match.addPlayer(userId, username, level, avatar);
+    match.addPlayer(userId, username, level, totalScore, avatar);
     await this.saveMatch(match);
 
     return match;
@@ -108,7 +109,7 @@ export class MatchService {
 
     await this.saveMatch(match);
 
-    return question ? this.questionService.toQuestionDto(question) : null;
+    return question ? this.toQuestionDto(question) : null;
   }
 
   async startMatch(roomId: string, userId: string): Promise<void> {
@@ -146,7 +147,61 @@ export class MatchService {
     match.addScore(userId, points);
     await this.saveMatch(match);
   }
+
+  getMatchDto(match: Match): MatchDto {
+    return {
+      roomId: match.getRoomId(),
+      difficulty: match.getDifficulty(),
+      mode: match.getMode(),
+      status: match.getStatus(),
+      currentQuestionIndex: match.getcurrentQuestionIndex(),
+      players: match.getPlayersWithInfo(),
+      questions: match.getQuestions().map((q) => this.toQuestionDto(q)),
+    };
+  }
+
   private async saveMatch(match: Match): Promise<void> {
     return await this.cache.set(CacheKeys.match(match.getRoomId()), match.toPersistence(), 900000); // todo: implement definition of ttl by now is 15 minutes
+  }
+
+  private toQuestionDto(question: Question): QuestionDto {
+    const options: OptionDto[] = question.options.map((option) => {
+      if (option.text && option.media) {
+        return {
+          id: option.id,
+          text: option.text,
+          media: option.media,
+        };
+      }
+
+      if (option.text) {
+        return {
+          id: option.id,
+          text: option.text,
+        };
+      }
+
+      if (option.media) {
+        return {
+          id: option.id,
+          media: option.media,
+        };
+      }
+
+      throw new Error(`Invalid option ${option.id}: empty`);
+    });
+
+    return {
+      id: question.id,
+      active: question.active,
+      createdAt: question.createdAt,
+      updatedAt: question.updatedAt,
+      questionText: question.questionText,
+      category: question.category,
+      categoryId: question.categoryId,
+      timeLimit: question.timeLimit,
+      media: question.media,
+      options: options,
+    };
   }
 }

@@ -5,7 +5,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Question } from 'src/db/entities';
 import { In, Repository } from 'typeorm';
 import { Level } from 'src/db/enum/question.enum';
-import { OptionDto, QuestionDto } from '../game/match/domain/match.interface';
 
 @Injectable()
 export class QuestionService {
@@ -62,29 +61,12 @@ export class QuestionService {
       relations: ['category', 'options'],
     });
 
-    return this.shuffle(questions);
-  }
-
-  toQuestionDto(question: Question): QuestionDto {
-    const options: OptionDto[] =
-      this.shuffle(question.options).map((option) => ({
-        id: option.id,
-        text: option.text,
-        media: option.media,
-      })) || [];
-
-    return {
-      id: question.id,
-      active: question.active,
-      createdAt: question.createdAt,
-      updatedAt: question.updatedAt,
-      questionText: question.questionText,
-      category: question.category,
-      categoryId: question.categoryId,
-      timeLimit: question.timeLimit,
-      media: question.media,
-      options: options,
-    };
+    return this.shuffle(
+      questions.map((q) => ({
+        ...q,
+        options: this.shuffle(q.options),
+      })),
+    );
   }
 
   private shuffle<T>(array: T[]): T[] {
