@@ -1,9 +1,9 @@
-import { Column, Entity, JoinColumn, ManyToOne } from 'typeorm';
+import { Column, Entity, OneToMany } from 'typeorm';
 import { CoreEntity, S3Object } from './model.core';
-import { UserGame } from './game.entity';
 import { IsEmail, IsEnum } from 'class-validator';
 import { Level } from '../enum/question.enum';
 import { UserRoles } from '../enum/roles.enum';
+import { GameSession } from './game-session.entity';
 
 @Entity()
 export class User extends CoreEntity {
@@ -38,7 +38,6 @@ export class User extends CoreEntity {
   @Column({ type: 'json', nullable: true })
   avatar: S3Object;
 
-  @ManyToOne(() => UserGame, (userGame) => userGame.user)
-  @JoinColumn({ name: 'user_games_id' }) // nombre exacto de la columna en la DB
-  userGames: UserGame;
+  @OneToMany(() => GameSession, (gameSession) => gameSession.user)
+  gameSessions: GameSession[];
 }
