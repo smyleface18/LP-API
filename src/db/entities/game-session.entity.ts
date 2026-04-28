@@ -3,34 +3,37 @@ import { CoreEntity } from './model.core';
 import { User } from './user.entity';
 import { Game } from './game.entity';
 import { PlayerAnswer } from './player-answer.entity';
-import { IsNotEmpty, IsUUID } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsOptional, IsUUID } from 'class-validator';
 
 @Entity()
 export class GameSession extends CoreEntity {
   @ManyToOne(() => User, (user) => user.gameSessions)
   @JoinColumn({ name: 'user_id' })
-  user: User;
+  user!: User;
 
   @IsNotEmpty()
   @IsUUID()
   @Column({ name: 'user_id', type: 'uuid' })
-  userId: string;
+  userId!: string;
 
   @ManyToOne(() => Game, (game) => game.sessions)
   @JoinColumn({ name: 'game_id' })
-  game: Game;
+  game!: Game;
 
   @IsNotEmpty()
   @IsUUID()
   @Column({ name: 'game_id', type: 'uuid' })
-  gameId: string;
+  gameId!: string;
 
+  @IsNumber()
   @Column()
-  score: number;
+  score!: number;
 
+  @IsOptional()
+  @IsNumber()
   @Column({ type: 'int', nullable: true })
-  position: number;
+  position!: number;
 
   @OneToMany(() => PlayerAnswer, (playerAnswer) => playerAnswer.gameSession)
-  answers: PlayerAnswer[];
+  answers!: PlayerAnswer[];
 }

@@ -3,40 +3,42 @@ import { CoreEntity } from './model.core';
 import { GameSession } from './game-session.entity';
 import { Question } from './question.entity';
 import { QuestionOption } from './question-option.entity';
-import { IsNotEmpty, IsUUID } from 'class-validator';
+import { IsBoolean, IsNotEmpty, IsNumber, IsUUID } from 'class-validator';
 
 @Entity()
 export class PlayerAnswer extends CoreEntity {
   @ManyToOne(() => GameSession, (gameSession) => gameSession.answers)
   @JoinColumn({ name: 'game_session_id' })
-  gameSession: GameSession;
+  gameSession!: GameSession;
 
   @IsNotEmpty()
   @IsUUID()
   @Column({ name: 'game_session_id', type: 'uuid' })
-  gameSessionId: string;
+  gameSessionId!: string;
 
   @ManyToOne(() => Question)
   @JoinColumn({ name: 'question_id' })
-  question: Question;
+  question!: Question;
 
   @IsNotEmpty()
   @IsUUID()
   @Column({ name: 'question_id', type: 'uuid' })
-  questionId: string;
+  questionId!: string;
 
   @ManyToOne(() => QuestionOption)
   @JoinColumn({ name: 'selected_option_id' })
-  selectedOption: QuestionOption;
+  selectedOption!: QuestionOption;
 
   @IsNotEmpty()
   @IsUUID()
   @Column({ name: 'selected_option_id', type: 'uuid' })
-  selectedOptionId: string;
+  selectedOptionId!: string;
 
+  @IsBoolean()
   @Column()
-  isCorrect: boolean;
+  isCorrect!: boolean;
 
+  @IsNumber()
   @Column({ type: 'int' })
-  timeTaken: number; // en segundos
+  timeTaken!: number; // en segundos
 }

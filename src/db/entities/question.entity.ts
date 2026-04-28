@@ -7,21 +7,25 @@ import { Game } from './game.entity';
 @Entity()
 export class Question extends CoreEntity {
   @Column({ type: 'json' })
-  content: ContentObject;
+  content!: ContentObject;
+
+  @IsOptional()
+  @Column({ type: 'text', nullable: true })
+  moreInfo?: string;
 
   @ManyToOne(() => CategoryQuestion, (category) => category.questions)
   @JoinColumn({ name: 'category_id' })
-  category: CategoryQuestion;
+  category!: CategoryQuestion;
 
   @OneToMany(() => QuestionOption, (questionOption) => questionOption.question, {
     cascade: true,
   })
-  options: QuestionOption[];
+  options!: QuestionOption[];
 
   @IsNotEmpty()
   @IsUUID()
   @Column({ name: 'category_id', type: 'uuid' })
-  categoryId: string;
+  categoryId!: string;
 
   @IsOptional()
   @IsNumber()
@@ -29,8 +33,8 @@ export class Question extends CoreEntity {
     type: 'int',
     default: 5000,
   })
-  timeLimit: number; // debe ser en milisegundo
+  timeLimit!: number; // debe ser en milisegundo
 
   @ManyToMany(() => Game, (game) => game.questions)
-  games: Game[];
+  games!: Game[];
 }

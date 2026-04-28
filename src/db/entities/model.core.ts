@@ -4,23 +4,23 @@ import { ContentType } from '../enum/question.enum';
 
 export class CoreEntity {
   @PrimaryGeneratedColumn('uuid')
-  id: string;
+  id!: string;
 
   @IsBoolean()
   @Column({ type: 'boolean', nullable: false, default: true })
-  active: boolean;
+  active!: boolean;
 
   @CreateDateColumn({ nullable: false })
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn({ nullable: true })
-  updatedAt: Date;
+  updatedAt!: Date;
 }
 
 export class S3Object {
-  key: string;
+  key!: string;
 
-  type: string;
+  type!: string;
 
   displayName?: string;
 
@@ -30,7 +30,7 @@ export class S3Object {
 }
 
 export class ContentObject {
-  type: ContentType;
-  value: string; // Para TEXTO, será el texto. Para otros, será la URL o la clave del S3Object.
+  type!: ContentType;
+  value!: string; // Para TEXTO, será el texto. Para otros, será la URL o la clave del S3Object.
   meta?: S3Object; // Opcional, para almacenar metadatos del archivo (key, bucket, etc.)
 }

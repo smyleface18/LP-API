@@ -11,20 +11,20 @@ export class CategoryQuestion extends CoreEntity {
     type: 'enum',
     enum: Level,
   })
-  level: Level;
+  level!: Level;
 
   @IsString()
   @IsNotEmpty()
   @Column()
-  descriptionCategory: string;
+  descriptionCategory!: string;
 
   @OneToMany(() => Question, (question) => question.category)
-  questions: Question[];
+  questions!: Question[];
 
   @IsEnum(TypeQuestionCategory)
   @Column({
     type: 'enum',
     enum: TypeQuestionCategory,
   })
-  type: TypeQuestionCategory;
+  type!: TypeQuestionCategory;
 }

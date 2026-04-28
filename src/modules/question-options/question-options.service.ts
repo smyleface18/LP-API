@@ -44,15 +44,9 @@ export class QuestionOptionsService {
       throw new HttpException(`Question option with id ${id} not found`, HttpStatus.NOT_FOUND);
     }
 
-    const text = updateQuestionOptionDto.text ?? questionOption.text;
+    const content = updateQuestionOptionDto.content ?? questionOption.content;
 
-    const media = updateQuestionOptionDto.media ?? questionOption.media;
-
-    if (!text) {
-      throw new HttpException('Text is required when renderType is TEXT', HttpStatus.BAD_REQUEST);
-    }
-
-    if (!media) {
+    if (!content) {
       throw new HttpException(
         'mediaUrl is required when renderType is AUDIO, IMAGE or VIDEO',
         HttpStatus.BAD_REQUEST,

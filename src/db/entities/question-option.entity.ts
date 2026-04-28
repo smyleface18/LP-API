@@ -6,19 +6,19 @@ import { IsBoolean, IsUUID } from 'class-validator';
 @Entity()
 export class QuestionOption extends CoreEntity {
   @Column({ type: 'json' })
-  content: ContentObject;
+  content!: ContentObject;
 
   @IsBoolean()
   @Column({ default: false })
-  isCorrect: boolean;
+  isCorrect!: boolean;
 
   @ManyToOne(() => Question, (q) => q.options, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'question_id' })
-  question: Question;
+  question!: Question;
 
   @IsUUID()
   @Column({ name: 'question_id', type: 'uuid' })
-  questionId: string;
+  questionId!: string;
 }
