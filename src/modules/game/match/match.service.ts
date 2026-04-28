@@ -167,41 +167,18 @@ export class MatchService {
 
   private toQuestionDto(question: Question): QuestionDto {
     const options: OptionDto[] = question.options.map((option) => {
-      if (option.text && option.media) {
-        return {
-          id: option.id,
-          text: option.text,
-          media: option.media,
-        };
-      }
-
-      if (option.text) {
-        return {
-          id: option.id,
-          text: option.text,
-        };
-      }
-
-      if (option.media) {
-        return {
-          id: option.id,
-          media: option.media,
-        };
-      }
-
-      throw new Error(`Invalid option ${option.id}: empty`);
+      return {
+        id: option.id,
+        content: option.content,
+      };
     });
 
     return {
       id: question.id,
-      active: question.active,
-      createdAt: question.createdAt,
-      updatedAt: question.updatedAt,
-      questionText: question.questionText,
+      content: question.content,
       category: question.category,
       categoryId: question.categoryId,
       timeLimit: question.timeLimit,
-      media: question.media,
       options: options,
     };
   }

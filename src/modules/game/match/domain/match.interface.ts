@@ -1,5 +1,5 @@
 import { CategoryQuestion } from 'src/db/entities';
-import { S3Object } from 'src/db/entities/model.core';
+import { ContentObject } from 'src/db/entities/model.core';
 import { Level } from 'src/db/enum/question.enum';
 
 export interface PlayerInfo {
@@ -36,34 +36,18 @@ export interface MatchSnapshot {
   players: [string, PlayerInfo][];
 }
 
-export type OptionDto =
-  | {
-      id: string;
-      text: string;
-      media?: undefined;
-    }
-  | {
-      id: string;
-      text?: undefined;
-      media: S3Object;
-    }
-  | {
-      id: string;
-      text: string;
-      media: S3Object;
-    };
+export interface OptionDto {
+  id: string;
+  content: ContentObject;
+}
 
 export interface QuestionDto {
   id: string;
-  active: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-  questionText: string;
+  content: ContentObject;
   category: CategoryQuestion;
   options: OptionDto[];
   categoryId: string;
   timeLimit: number;
-  media?: S3Object;
 }
 
 export interface MatchDto {
