@@ -7,6 +7,13 @@ export enum Level {
   C2 = 'C2',
 }
 
+export enum ContentType {
+  TEXT = 'TEXT',
+  IMAGE = 'IMAGE',
+  AUDIO = 'AUDIO',
+  VIDEO = 'VIDEO',
+}
+
 export enum TypeQuestionCategory {
   LISTENING = 'LISTENING',
   GRAMMAR = 'GRAMMAR',
