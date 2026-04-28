@@ -25,7 +25,7 @@ export class Match {
     this.questions = questions;
     this.owner = owner;
     this.mode = mode;
-    this.addPlayer(owner.id, owner.username, owner.level, owner.score, owner.avatar?.url, true);
+    this.addPlayer(owner.id, owner.username, owner.level, owner.score, true, owner.avatar?.url);
   }
 
   getRoomId(): string {
@@ -45,8 +45,8 @@ export class Match {
     username: string = 'Anonymous',
     level: Level,
     totalScore: number = 0,
-    avatar?: string,
     isOwner: boolean = false,
+    avatar?: string,
   ) {
     if (this.players.has(userId)) return;
 

@@ -47,11 +47,12 @@ export class MatchService {
     username: string = 'Anonymous',
     level: Level = Level.A1,
     totalScore: number = 0,
+    isOwner: boolean = false,
     avatar?: string,
   ): Promise<Match> {
     const match = await this.getMatch(roomId);
 
-    match.addPlayer(userId, username, level, totalScore, avatar);
+    match.addPlayer(userId, username, level, totalScore, isOwner, avatar);
     await this.saveMatch(match);
 
     return match;
