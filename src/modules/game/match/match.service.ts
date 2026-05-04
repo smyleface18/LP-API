@@ -8,8 +8,9 @@ import { CacheKeys } from 'src/common/src/cache/cache-key';
 import { MatchNotFoundError } from './domain/exceptions/match-not-found.error';
 import { UniqueNamesAdapter } from 'src/common/src/unique-names/unique-names.adapter';
 import { v4 } from 'uuid';
-import { Question, User } from 'src/db/entities';
+import { Question, QuestionOption, User } from 'src/db/entities';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { QuestionResultDto } from '../types';
 
 @Injectable()
 export class MatchService {
@@ -149,6 +150,25 @@ export class MatchService {
     await this.saveMatch(match);
   }
 
+  async processAnswer(
+    roomId: string,
+    questionId: string,
+    answerId: string,
+    userId: string,
+  ): Promise<QuestionResultDto> {
+    const match = await this.getMatch(roomId);
+    const answer = match.getQuestionById(questionId).options.find((op) => op.id == answerId);
+    const correctAnswers = match.getQuestionById(questionId).options.filter((op) => op.isCorrect);
+    match.addScore(userId, answer?.isCorrect ? 100 : 0);
+    await this.saveMatch(match);
+
+    return {
+      isCorrect: !answer?.isCorrect,
+      correctAnswer: correctAnswers,
+      pointsEarned: answer?.isCorrect ? 100 : 0,
+    };
+  }
+
   getMatchDto(match: Match): MatchDto {
     return {
       roomId: match.getRoomId(),
@@ -167,10 +187,7 @@ export class MatchService {
 
   private toQuestionDto(question: Question): QuestionDto {
     const options: OptionDto[] = question.options.map((option) => {
-      return {
-        id: option.id,
-        content: option.content,
-      };
+      return this.toOptionDto(option);
     });
 
     return {
@@ -180,6 +197,13 @@ export class MatchService {
       categoryId: question.categoryId,
       timeLimit: question.timeLimit,
       options: options,
+    };
+  }
+
+  private toOptionDto(option: QuestionOption): OptionDto {
+    return {
+      id: option.id,
+      content: option.content,
     };
   }
 }

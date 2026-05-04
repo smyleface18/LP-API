@@ -14,7 +14,7 @@ import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { MatchService } from './match/match.service';
 import { ApiResponse } from 'src/common/src/api/api.type';
-import { ConnectionGameSocket, CreateGameDto, JoinGameDto } from './types';
+import { AnswerQuestionDto, ConnectionGameSocket, CreateGameDto, JoinGameDto } from './types';
 import { MatchStatus, QuestionDto } from './match/domain/match.interface';
 import { OnEvent } from '@nestjs/event-emitter';
 import { WsAuthService } from 'src/common/src/ws-auth/ws-auth.service';
@@ -44,7 +44,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: ConnectionGameSocket,
   ): Promise<ApiResponse<null>> {
     const token = client.handshake.auth?.token as string;
-    console.log('Token recibido en conexión:', token);
     if (!token) {
       client.emit('error', { message: 'Token missing' });
       client.disconnect();
@@ -202,7 +201,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('answer')
   async handleAnswer(
-    @MessageBody() data: { questionId: string; answerId: string },
+    @MessageBody() data: AnswerQuestionDto,
     @ConnectedSocket() client: ConnectionGameSocket,
   ) {
     if (!data.questionId || !data.answerId) {
@@ -215,18 +214,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       throw new BadRequestException('missing userId or roomId');
     }
 
-    const match = await this.matchService.getMatch(roomId);
-
-    const answer = match
-      .getQuestionById(data.questionId)
-      .options.find((op) => op.id == data.answerId);
-
     client.emit('answerResult', {
-      correct: answer?.isCorrect,
-      correctAnswer: match.getQuestionById(data.questionId).options.filter((op) => op.isCorrect),
+      ...(await this.matchService.processAnswer(roomId, data.questionId, data.answerId, userId)),
     });
-
-    await this.matchService.addScore(roomId, userId, answer?.isCorrect ? 100 : 0);
 
     return { received: true };
   }
