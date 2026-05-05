@@ -21,7 +21,7 @@ export class GameTimeoutQueue {
       },
       {
         jobId: `end-question-roomId-${timeoutDto.roomId}-+${Date.now()}`,
-        delay: timeoutDto.timeLimit,
+        delay: timeoutDto.timeLimit * 1000,
         removeOnComplete: true,
         removeOnFail: true,
       },

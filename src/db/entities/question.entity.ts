@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsNumber, IsOptional, IsUUID } from 'class-validator';
+import { IsNotEmpty, IsNumber, IsObject, IsOptional, IsUUID } from 'class-validator';
 import { ContentObject, CoreEntity } from './model.core';
 import { Column, Entity, JoinColumn, ManyToMany, ManyToOne, OneToMany } from 'typeorm';
 import { CategoryQuestion } from './category-question.entity';
@@ -6,6 +6,7 @@ import { QuestionOption } from './question-option.entity';
 import { Game } from './game.entity';
 @Entity()
 export class Question extends CoreEntity {
+  @IsObject()
   @Column({ type: 'json' })
   content!: ContentObject;
 
@@ -31,9 +32,9 @@ export class Question extends CoreEntity {
   @IsNumber()
   @Column({
     type: 'int',
-    default: 5000,
+    default: 5,
   })
-  timeLimit!: number; // debe ser en milisegundo
+  timeLimit!: number; // debe ser en segundos
 
   @ManyToMany(() => Game, (game) => game.questions)
   games!: Game[];

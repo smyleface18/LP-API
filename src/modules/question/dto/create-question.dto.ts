@@ -6,6 +6,7 @@ export class CreateQuestionDto extends OmitType(Question, [
   'active',
   'createdAt',
   'updatedAt',
+  'options',
   'games',
   'category',
 ] as const) {}
