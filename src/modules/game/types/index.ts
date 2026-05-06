@@ -1,5 +1,5 @@
 import { Socket } from 'socket.io';
-import { ModeMatch } from '../match/domain/match.interface';
+import { ModeMatch, PlayerInfo } from '../match/domain/match.interface';
 import { Level } from 'src/db/enum/question.enum';
 import { QuestionOption } from 'src/db/entities';
 
@@ -33,5 +33,9 @@ export interface AnswerQuestionDto {
 export interface QuestionResultDto {
   isCorrect: boolean;
   correctAnswer: QuestionOption[];
-  pointsEarned: number;
+}
+export interface AnswerProcessResultDto {
+  isCorrect: boolean;
+  correctAnswer: QuestionOption[];
+  playersScores: PlayerInfo[];
 }

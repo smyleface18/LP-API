@@ -25,6 +25,7 @@ export class Match {
     this.questions = questions;
     this.owner = owner;
     this.mode = mode;
+    this.status = MatchStatus.WAITING;
     this.addPlayer(owner.id, owner.username, owner.level, owner.score, true, owner.avatar?.url);
   }
 
@@ -126,12 +127,17 @@ export class Match {
     return this.currentQuestionIndex < this.questions.length;
   }
 
-  getResults() {
-    const results = Array.from(this.players.values()).map((p) => ({
-      userId: p.userId,
-      score: p.matchScore,
+  getResults(): PlayerInfo[] {
+    return Array.from(this.players.values()).map((player) => ({
+      userId: player.userId,
+      username: player.username,
+      level: player.level,
+      matchScore: player.matchScore,
+      totalScore: player.totalScore,
+      isConnected: player.isConnected,
+      isOwner: player.isOwner,
+      avatar: player.avatar,
     }));
-    return results;
   }
 
   getStatus() {
@@ -155,8 +161,8 @@ export class Match {
     return this.owner;
   }
 
-  startMatchPreparation() {
-    this.setStatus(MatchStatus.PREPARING);
+  start() {
+    this.setStatus(MatchStatus.STARTING);
   }
 
   getcurrentQuestionIndex() {
@@ -167,7 +173,7 @@ export class Match {
     return this.questions.reduce((acc, question) => acc + question.timeLimit, 0);
   }
 
-  getNexQuestion(): Question | null {
+  getNextQuestion(): Question | null {
     if (this.currentQuestionIndex >= this.questions.length) {
       this.setStatus(MatchStatus.FINISHED);
       return null;

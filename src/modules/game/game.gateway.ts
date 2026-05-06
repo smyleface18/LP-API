@@ -7,18 +7,25 @@ import {
   OnGatewayConnection,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, UseFilters } from '@nestjs/common';
 import { Server } from 'socket.io';
 import { User } from 'src/db/entities';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { MatchService } from './match/match.service';
 import { ApiResponse } from 'src/common/src/api/api.type';
-import { AnswerQuestionDto, ConnectionGameSocket, CreateGameDto, JoinGameDto } from './types';
-import { MatchStatus, QuestionDto } from './match/domain/match.interface';
+import {
+  AnswerQuestionDto,
+  ConnectionGameSocket,
+  CreateGameDto,
+  JoinGameDto,
+  QuestionResultDto,
+} from './types';
+import { MatchStatus, PlayerInfo, QuestionDto } from './match/domain/match.interface';
 import { OnEvent } from '@nestjs/event-emitter';
 import { WsAuthService } from 'src/common/src/ws-auth/ws-auth.service';
 import { GameService } from './game.service';
+import { WsHttpExceptionFilter } from 'src/common/src/api/ws-exception.filter';
 
 @WebSocketGateway({
   namespace: '/game',
@@ -29,6 +36,7 @@ import { GameService } from './game.service';
   },
   transports: ['websocket', 'polling'],
 })
+@UseFilters(new WsHttpExceptionFilter())
 export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server!: Server;
 
@@ -203,7 +211,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async handleAnswer(
     @MessageBody() data: AnswerQuestionDto,
     @ConnectedSocket() client: ConnectionGameSocket,
-  ) {
+  ): Promise<ApiResponse<QuestionResultDto>> {
     if (!data.questionId || !data.answerId) {
       throw new BadRequestException('missing questionId or anwerId');
     }
@@ -213,12 +221,27 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (!userId || !roomId) {
       throw new BadRequestException('missing userId or roomId');
     }
+    const result = await this.matchService.processAnswer(
+      roomId,
+      data.questionId,
+      data.answerId,
+      userId,
+    );
 
-    client.emit('answerResult', {
-      ...(await this.matchService.processAnswer(roomId, data.questionId, data.answerId, userId)),
+    this.server.to(roomId).emit('playersUpdated', {
+      players: result.playersScores,
     });
-
-    return { received: true };
+    console.log(
+      `😶‍🌫️Usuario ${userId} respondió a la pregunta ${data.questionId} con la opción ${data.answerId} - Correcto: ${result.isCorrect}😶‍🌫️`,
+    );
+    return {
+      ok: true,
+      data: {
+        correctAnswer: result.correctAnswer,
+        isCorrect: result.isCorrect,
+      },
+      message: 'answer processed',
+    };
   }
 
   @SubscribeMessage('startGame')
@@ -239,6 +262,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     await this.gameService.start(client.data.roomId, user.id);
 
+    this.server.to(client.data.roomId).emit('gameStarted');
+
     return { success: true };
   }
 
@@ -251,11 +276,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       throw new BadRequestException('missing userId or roomId');
     }
 
-    await this.matchService.disconnectUser(userId, roomId);
+    const match = await this.matchService.disconnectUser(userId, roomId);
 
     await client.leave(roomId);
 
-    const match = await this.matchService.getMatch(roomId);
     this.server.to(roomId).emit('playersUpdated', {
       players: match.getPlayersWithInfo(),
     });
@@ -293,7 +317,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @OnEvent('game.finished')
-  handleGameFinished(payload: { roomId: string; results: any[] }) {
+  handleGameFinished(payload: { roomId: string; results: PlayerInfo[] }) {
     console.log(
       `🏁 [GameGateway] Game finished - room ${payload.roomId}, ${payload.results.length} players`,
     );

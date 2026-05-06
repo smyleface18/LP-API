@@ -10,7 +10,7 @@ import { UniqueNamesAdapter } from 'src/common/src/unique-names/unique-names.ada
 import { v4 } from 'uuid';
 import { Question, QuestionOption, User } from 'src/db/entities';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import { QuestionResultDto } from '../types';
+import { AnswerProcessResultDto } from '../types';
 
 @Injectable()
 export class MatchService {
@@ -114,7 +114,7 @@ export class MatchService {
     return question ? this.toQuestionDto(question) : null;
   }
 
-  async startMatch(roomId: string, userId: string): Promise<void> {
+  async startMatch(roomId: string, userId: string): Promise<MatchStatus> {
     const match = await this.getMatch(roomId);
 
     if (match.getOwner().id != userId) {
@@ -127,9 +127,11 @@ export class MatchService {
       throw new BadRequestException('The game has already started.');
     }
 
-    match.startMatchPreparation();
+    match.start();
 
     await this.saveMatch(match);
+
+    return match.getStatus();
   }
 
   async finishCurrentQuestion(roomId: string): Promise<Match> {
@@ -144,28 +146,25 @@ export class MatchService {
     return match.hasNextQuestion();
   }
 
-  async addScore(roomId: string, userId: string, points: number): Promise<void> {
-    const match = await this.getMatch(roomId);
-    match.addScore(userId, points);
-    await this.saveMatch(match);
-  }
-
   async processAnswer(
     roomId: string,
     questionId: string,
     answerId: string,
     userId: string,
-  ): Promise<QuestionResultDto> {
+  ): Promise<AnswerProcessResultDto> {
     const match = await this.getMatch(roomId);
     const answer = match.getQuestionById(questionId).options.find((op) => op.id == answerId);
+    if (!answer) {
+      throw new BadRequestException('Invalid answerId');
+    }
     const correctAnswers = match.getQuestionById(questionId).options.filter((op) => op.isCorrect);
-    match.addScore(userId, answer?.isCorrect ? 100 : 0);
+    match.addScore(userId, answer.isCorrect ? 100 : 0);
+    console.log(match.getPlayersWithInfo());
     await this.saveMatch(match);
-
     return {
-      isCorrect: !answer?.isCorrect,
+      isCorrect: answer.isCorrect,
       correctAnswer: correctAnswers,
-      pointsEarned: answer?.isCorrect ? 100 : 0,
+      playersScores: match.getPlayersWithInfo(),
     };
   }
 
