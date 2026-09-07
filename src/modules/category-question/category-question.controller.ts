@@ -5,7 +5,7 @@ import { UpdateCategoryQuestionDto } from './dto/update-category-question.dto';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
-import { UserRoles } from 'src/db/enum/roles.enum';
+import { UserRoles } from '@/db/enum/roles.enum';
 
 @Controller('category-question')
 export class CategoryQuestionController {

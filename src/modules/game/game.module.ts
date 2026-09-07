@@ -4,8 +4,8 @@ import { GameGateway } from './game.gateway';
 import { QuestionModule } from '../question/question.module';
 import { MatchModule } from './match/match.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ENTITIES } from 'src/db/database.module';
-import { WsAuthModule } from 'src/common/src/ws-auth/ws-auth.module';
+import { ENTITIES } from '@/db/database.module';
+import { WsAuthModule } from '@/common/src/ws-auth/ws-auth.module';
 
 @Module({
   providers: [GameGateway, GameService],

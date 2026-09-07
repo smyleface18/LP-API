@@ -11,9 +11,9 @@ import { ConfigService } from '@nestjs/config';
 import { SignUpDto } from './dto/signUp.dto';
 import { v4 } from 'uuid';
 import { SignInDto } from './dto/signIn.dto';
-import { UserRoles } from 'src/db/enum/roles.enum';
+import { UserRoles } from '@/db/enum/roles.enum';
 import { Repository } from 'typeorm';
-import { User } from 'src/db/entities';
+import { User } from '@/db/entities';
 import { InjectRepository } from '@nestjs/typeorm';
 
 @Injectable()

@@ -10,7 +10,14 @@ async function bootstrap() {
 
   // CORS para HTTP
   app.enableCors({
-    origin: '*', // En producción, especifica dominios: ['http://localhost:3000', 'https://tuapp.com']
+    origin: (origin, callback) => {
+      if (!origin || /^https?:\/\/localhost(:\d+)?$/.test(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error('Origin not allowed by CORS'), false);
+    },
     credentials: true,
   });
 

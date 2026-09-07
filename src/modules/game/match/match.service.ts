@@ -1,14 +1,14 @@
 import { MatchDto, MatchStatus, ModeMatch, OptionDto, QuestionDto } from './domain/match.interface';
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Match } from './domain/match.entity';
-import { CacheService } from 'src/common/src/cache/cache.service';
-import { Level } from 'src/db/enum/question.enum';
-import { QuestionService } from 'src/modules/question/question.service';
-import { CacheKeys } from 'src/common/src/cache/cache-key';
+import { CacheService } from '@/common/src/cache/cache.service';
+import { Level } from '@/db/enum/question.enum';
+import { QuestionService } from '@/modules/question/question.service';
+import { CacheKeys } from '@/common/src/cache/cache-key';
 import { MatchNotFoundError } from './domain/exceptions/match-not-found.error';
-import { UniqueNamesAdapter } from 'src/common/src/unique-names/unique-names.adapter';
+import { UniqueNamesAdapter } from '@/common/src/unique-names/unique-names.adapter';
 import { v4 } from 'uuid';
-import { Question, QuestionOption, User } from 'src/db/entities';
+import { Question, QuestionOption, User } from '@/db/entities';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AnswerProcessResultDto } from '../types';
 
@@ -48,12 +48,11 @@ export class MatchService {
     username: string = 'Anonymous',
     level: Level = Level.A1,
     totalScore: number = 0,
-    isOwner: boolean = false,
     avatar?: string,
   ): Promise<Match> {
     const match = await this.getMatch(roomId);
 
-    match.addPlayer(userId, username, level, totalScore, isOwner, avatar);
+    match.addPlayer(userId, username, level, totalScore, avatar);
     await this.saveMatch(match);
 
     return match;
@@ -134,6 +133,17 @@ export class MatchService {
     return match.getStatus();
   }
 
+  async resetForRematch(roomId: string): Promise<Match> {
+    const match = await this.getMatch(roomId);
+    if (match.getStatus() !== MatchStatus.FINISHED) {
+      throw new BadRequestException('The game is not finished yet.');
+    }
+
+    match.resetForRematch();
+    await this.saveMatch(match);
+    return match;
+  }
+
   async finishCurrentQuestion(roomId: string): Promise<Match> {
     const match = await this.getMatch(roomId);
     match.finishCurrentQuestion();
@@ -159,6 +169,7 @@ export class MatchService {
     }
     const correctAnswers = match.getQuestionById(questionId).options.filter((op) => op.isCorrect);
     match.addScore(userId, answer.isCorrect ? 100 : 0);
+    console.log(`addscore userId: ${userId}, points: ${answer.isCorrect ? 100 : 0}`);
     console.log(match.getPlayersWithInfo());
     await this.saveMatch(match);
     return {

@@ -2,9 +2,9 @@ import { Injectable } from '@nestjs/common';
 import { CreateQuestionDto } from './dto/create-question.dto';
 import { UpdateQuestionDto } from './dto/update-question.dto';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Question } from 'src/db/entities';
+import { Question } from '@/db/entities';
 import { In, Repository } from 'typeorm';
-import { Level } from 'src/db/enum/question.enum';
+import { Level } from '@/db/enum/question.enum';
 
 @Injectable()
 export class QuestionService {

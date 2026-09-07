@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { QuestionService } from './question.service';
 import { QuestionController } from './question.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ENTITIES } from 'src/db/database.module';
+import { ENTITIES } from '@/db/database.module';
 
 @Module({
   controllers: [QuestionController],

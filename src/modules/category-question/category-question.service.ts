@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { CreateCategoryQuestionDto } from './dto/create-category-question.dto';
 import { UpdateCategoryQuestionDto } from './dto/update-category-question.dto';
-import { CategoryQuestion } from 'src/db/entities';
+import { CategoryQuestion } from '@/db/entities';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 

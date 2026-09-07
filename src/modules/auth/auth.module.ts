@@ -4,7 +4,7 @@ import { AuthController } from './auth.controller';
 import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './jwt.strategy';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ENTITIES } from 'src/db/database.module';
+import { ENTITIES } from '@/db/database.module';
 
 @Module({
   controllers: [AuthController],

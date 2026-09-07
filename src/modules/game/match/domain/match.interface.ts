@@ -1,6 +1,6 @@
-import { CategoryQuestion } from 'src/db/entities';
-import { ContentObject } from 'src/db/entities/model.core';
-import { Level } from 'src/db/enum/question.enum';
+import { CategoryQuestion } from '@/db/entities';
+import { ContentObject } from '@/db/entities/model.core';
+import { Level } from '@/db/enum/question.enum';
 
 export interface PlayerInfo {
   userId: string;

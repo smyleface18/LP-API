@@ -1,7 +1,7 @@
 import { Socket } from 'socket.io';
 import { ModeMatch, PlayerInfo } from '../match/domain/match.interface';
-import { Level } from 'src/db/enum/question.enum';
-import { QuestionOption } from 'src/db/entities';
+import { Level } from '@/db/enum/question.enum';
+import { QuestionOption } from '@/db/entities';
 
 export interface ConnectionGameSocket extends Socket {
   data: {

@@ -1,7 +1,7 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { CreateQuestionOptionDto } from './dto/create-question-option.dto';
 import { UpdateQuestionOptionDto } from './dto/update-question-option.dto';
-import { QuestionOption } from 'src/db/entities/question-option.entity';
+import { QuestionOption } from '@/db/entities/question-option.entity';
 import { DeleteResult, Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 
@@ -32,7 +32,7 @@ export class QuestionOptionsService {
     });
 
     if (!questionOption) {
-      new HttpException(`question option with ${id} not found`, HttpStatus.NOT_FOUND);
+      throw new HttpException(`question option with ${id} not found`, HttpStatus.NOT_FOUND);
     }
     return questionOption;
   }

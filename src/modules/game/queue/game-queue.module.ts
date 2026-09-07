@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
 import { GameTimeoutQueue } from './queue.service';
 import { GameTimeoutProcessor } from './queue.processor';
-import { EnvsService } from 'src/common/src/envs/envs.service';
-import { EnvsModule } from 'src/common/src/envs/envs.module';
+import { EnvsService } from '@/common/src/envs/envs.service';
+import { EnvsModule } from '@/common/src/envs/envs.module';
 import { BullModule } from '@nestjs/bullmq';
 import { GameModule } from '../game.module';
 

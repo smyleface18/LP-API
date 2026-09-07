@@ -1,5 +1,5 @@
 import { OmitType } from '@nestjs/mapped-types';
-import { QuestionOption } from 'src/db/entities/question-option.entity';
+import { QuestionOption } from '@/db/entities/question-option.entity';
 
 export class CreateQuestionOptionDto extends OmitType(QuestionOption, [
   'id',

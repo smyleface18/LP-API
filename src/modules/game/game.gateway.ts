@@ -7,38 +7,31 @@ import {
   OnGatewayConnection,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { BadRequestException, UseFilters } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
 import { Server } from 'socket.io';
-import { User } from 'src/db/entities';
+import { User } from '@/db/entities';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { MatchService } from './match/match.service';
-import { ApiResponse } from 'src/common/src/api/api.type';
-import {
-  AnswerQuestionDto,
-  ConnectionGameSocket,
-  CreateGameDto,
-  JoinGameDto,
-  QuestionResultDto,
-} from './types';
-import { MatchStatus, PlayerInfo, QuestionDto } from './match/domain/match.interface';
+import { ApiResponse } from '@/common/src/api/api.type';
+import { ConnectionGameSocket, CreateGameDto, JoinGameDto } from './types';
+import { MatchStatus, QuestionDto } from './match/domain/match.interface';
 import { OnEvent } from '@nestjs/event-emitter';
-import { WsAuthService } from 'src/common/src/ws-auth/ws-auth.service';
+import { WsAuthService } from '@/common/src/ws-auth/ws-auth.service';
 import { GameService } from './game.service';
-import { WsHttpExceptionFilter } from 'src/common/src/api/ws-exception.filter';
 
 @WebSocketGateway({
   namespace: '/game',
   cors: {
-    origin: '*',
+    origin: true,
     credentials: true,
     methods: ['GET', 'POST'],
   },
   transports: ['websocket', 'polling'],
 })
-@UseFilters(new WsHttpExceptionFilter())
 export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server!: Server;
+  private readonly rematchRequests = new Map<string, Set<string>>();
 
   constructor(
     private readonly matchService: MatchService,
@@ -52,6 +45,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: ConnectionGameSocket,
   ): Promise<ApiResponse<null>> {
     const token = client.handshake.auth?.token as string;
+    console.log('Token recibido en conexión:', token);
     if (!token) {
       client.emit('error', { message: 'Token missing' });
       client.disconnect();
@@ -129,6 +123,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       createGameDto.modeMatch,
       user,
     );
+    match.addPlayer(user.id, user.username, user.level, user.score, user.avatar?.url);
 
     console.log('roomId del match:', match.getRoomId());
     console.log('rooms antes del join:', [...client.rooms]);
@@ -182,7 +177,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       user.username,
       user.level,
       user.score,
-      false,
       user.avatar?.url,
     );
 
@@ -209,9 +203,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('answer')
   async handleAnswer(
-    @MessageBody() data: AnswerQuestionDto,
+    @MessageBody() data: { questionId: string; answerId: string },
     @ConnectedSocket() client: ConnectionGameSocket,
-  ): Promise<ApiResponse<QuestionResultDto>> {
+  ) {
     if (!data.questionId || !data.answerId) {
       throw new BadRequestException('missing questionId or anwerId');
     }
@@ -221,6 +215,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (!userId || !roomId) {
       throw new BadRequestException('missing userId or roomId');
     }
+
     const result = await this.matchService.processAnswer(
       roomId,
       data.questionId,
@@ -228,20 +223,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       userId,
     );
 
+    client.emit('answerResult', {
+      correct: result.isCorrect,
+      correctAnswer: result.correctAnswer,
+    });
+
     this.server.to(roomId).emit('playersUpdated', {
       players: result.playersScores,
     });
-    console.log(
-      `😶‍🌫️Usuario ${userId} respondió a la pregunta ${data.questionId} con la opción ${data.answerId} - Correcto: ${result.isCorrect}😶‍🌫️`,
-    );
-    return {
-      ok: true,
-      data: {
-        correctAnswer: result.correctAnswer,
-        isCorrect: result.isCorrect,
-      },
-      message: 'answer processed',
-    };
+
+    return { received: true };
   }
 
   @SubscribeMessage('startGame')
@@ -261,8 +252,43 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
 
     await this.gameService.start(client.data.roomId, user.id);
-
     this.server.to(client.data.roomId).emit('gameStarted');
+
+    return { success: true };
+  }
+
+  @SubscribeMessage('requestRematch')
+  async handleRequestRematch(@ConnectedSocket() client: ConnectionGameSocket) {
+    const roomId = client.data.roomId;
+    const userId = client.data.userId;
+    if (!roomId || !userId) throw new BadRequestException('missing userId or roomId');
+
+    const match = await this.matchService.getMatch(roomId);
+    if (match.getStatus() !== MatchStatus.FINISHED) {
+      throw new BadRequestException('The game is not finished yet.');
+    }
+
+    await client.join(roomId);
+    const requests = this.rematchRequests.get(roomId) ?? new Set<string>();
+    requests.add(userId);
+    this.rematchRequests.set(roomId, requests);
+
+    const players = match.getPlayersWithInfo();
+    this.server.to(roomId).emit('rematchStatus', {
+      accepted: requests.size,
+      total: players.length,
+    });
+
+    if (requests.size === players.length) {
+      const rematch = await this.matchService.resetForRematch(roomId);
+      this.rematchRequests.delete(roomId);
+      this.server.to(roomId).emit('rematchReady', {
+        roomId: rematch.getRoomId(),
+        level: rematch.getDifficulty(),
+        modeMatch: rematch.getMode(),
+        players: rematch.getPlayersWithInfo(),
+      });
+    }
 
     return { success: true };
   }
@@ -276,10 +302,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       throw new BadRequestException('missing userId or roomId');
     }
 
-    const match = await this.matchService.disconnectUser(userId, roomId);
+    await this.matchService.disconnectUser(userId, roomId);
 
     await client.leave(roomId);
 
+    const match = await this.matchService.getMatch(roomId);
     this.server.to(roomId).emit('playersUpdated', {
       players: match.getPlayersWithInfo(),
     });
@@ -298,9 +325,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     totalQuestions: number;
     timeLimit: number;
   }) {
-    console.log(
-      `📋 [GameGateway] Sending question ${payload.questionNumber}/${payload.totalQuestions} to room ${payload.roomId}`,
-    );
+    console.log('pregunta enviada a:', payload.roomId);
 
     this.server.to(payload.roomId).emit('newQuestion', {
       question: payload.question,
@@ -312,15 +337,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @OnEvent('game.question-ended')
   handleQuestionEnded(payload: { roomId: string }) {
-    console.log(`⏱️ [GameGateway] Question ended for room ${payload.roomId}`);
     this.server.to(payload.roomId).emit('questionEnded');
   }
 
   @OnEvent('game.finished')
-  handleGameFinished(payload: { roomId: string; results: PlayerInfo[] }) {
-    console.log(
-      `🏁 [GameGateway] Game finished - room ${payload.roomId}, ${payload.results.length} players`,
-    );
+  handleGameFinished(payload: { roomId: string; results: any[] }) {
     this.server.to(payload.roomId).emit('gameEnded', { results: payload.results });
     this.server.in(payload.roomId).socketsLeave(payload.roomId);
   }

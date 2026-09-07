@@ -1,6 +1,6 @@
-import { Question, User } from 'src/db/entities';
+import { Question, User } from '@/db/entities';
 import { MatchStatus, ModeMatch, PlayerInfo } from './match.interface';
-import { Level } from 'src/db/enum/question.enum';
+import { Level } from '@/db/enum/question.enum';
 import { QuestionNotFoundError } from './exceptions/question-not-found.error';
 
 export class Match {
@@ -26,7 +26,7 @@ export class Match {
     this.owner = owner;
     this.mode = mode;
     this.status = MatchStatus.WAITING;
-    this.addPlayer(owner.id, owner.username, owner.level, owner.score, true, owner.avatar?.url);
+    this.addPlayer(owner.id, owner.username, owner.level, owner.score, owner.avatar?.url);
   }
 
   getRoomId(): string {
@@ -46,7 +46,6 @@ export class Match {
     username: string = 'Anonymous',
     level: Level,
     totalScore: number = 0,
-    isOwner: boolean = false,
     avatar?: string,
   ) {
     if (this.players.has(userId)) return;
@@ -58,7 +57,7 @@ export class Match {
       matchScore: 0,
       totalScore: totalScore,
       isConnected: true,
-      isOwner: isOwner,
+      isOwner: this.owner.id === userId,
       avatar: avatar,
     });
   }
@@ -163,6 +162,15 @@ export class Match {
 
   start() {
     this.setStatus(MatchStatus.STARTING);
+  }
+
+  resetForRematch() {
+    this.currentQuestionIndex = 0;
+    this.status = MatchStatus.WAITING;
+    this.players.forEach((player) => {
+      player.matchScore = 0;
+      player.isConnected = true;
+    });
   }
 
   getcurrentQuestionIndex() {
