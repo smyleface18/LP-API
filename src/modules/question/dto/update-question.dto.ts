@@ -1,4 +1,9 @@
-import { PartialType } from '@nestjs/mapped-types';
-import { CreateQuestionDto } from './create-question.dto';
+import { OmitType, PartialType } from '@nestjs/mapped-types';
+import { Question } from '@/db/entities';
 
-export class UpdateQuestionDto extends PartialType(CreateQuestionDto) {}
+// A diferencia de CreateQuestionDto, sí permite actualizar `active`:
+// activar/desactivar una pregunta existente es una operación de update,
+// no de creación.
+export class UpdateQuestionDto extends PartialType(
+  OmitType(Question, ['id', 'createdAt', 'updatedAt', 'options', 'games', 'category'] as const),
+) {}

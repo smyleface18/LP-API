@@ -19,14 +19,14 @@ export class QuestionService {
 
   async findAll() {
     return await this.repo.find({
-      relations: ['category'],
+      relations: ['category', 'options'],
     });
   }
 
   async findOne(id: string) {
     return await this.repo.findOne({
       where: { id },
-      relations: ['category'],
+      relations: ['category', 'options'],
     });
   }
 
