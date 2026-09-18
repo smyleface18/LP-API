@@ -7,6 +7,8 @@ import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { UserRoles } from '@/db/enum/roles.enum';
 
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRoles.ADMIN)
 @Controller('category-question')
 export class CategoryQuestionController {
   constructor(private readonly categoryQuestionService: CategoryQuestionService) {}
@@ -16,8 +18,6 @@ export class CategoryQuestionController {
     return this.categoryQuestionService.create(createCategoryQuestionDto);
   }
 
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(UserRoles.ADMIN)
   @Get()
   findAll() {
     return this.categoryQuestionService.findAll();
