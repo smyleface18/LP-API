@@ -11,6 +11,7 @@ async function bootstrap() {
   // CORS para HTTP
   app.enableCors({
     origin: (origin, callback) => {
+      return callback(null, true);
       if (!origin || /^https?:\/\/localhost(:\d+)?$/.test(origin)) {
         callback(null, true);
         return;
