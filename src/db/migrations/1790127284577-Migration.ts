@@ -7,6 +7,9 @@ export class Migration1790127284577 implements MigrationInterface {
     await queryRunner.query(
       `ALTER TABLE "question" DROP CONSTRAINT "CHK_55410ad3b0bbed036cd6ffd02d"`,
     );
+    // El CHECK anterior obligaba text = NULL en preguntas no-TEXT; sin este
+    // backfill el SET NOT NULL falla si existe alguna.
+    await queryRunner.query(`UPDATE "question" SET "text" = '' WHERE "text" IS NULL`);
     await queryRunner.query(`ALTER TABLE "question" ALTER COLUMN "text" SET NOT NULL`);
     await queryRunner.query(
       `ALTER TABLE "question" ADD CONSTRAINT "CHK_5e00407541ecca3f0f165bdcf2" CHECK (("contentType" = 'TEXT' AND "media_id" IS NULL) OR ("contentType" != 'TEXT' AND "media_id" IS NOT NULL))`,

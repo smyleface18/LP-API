@@ -1,8 +1,14 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import { Controller, Get, Post, Body, Patch, Param, Delete, UseGuards } from '@nestjs/common';
 import { QuestionOptionsService } from './question-options.service';
 import { CreateQuestionOptionDto } from './dto/create-question-option.dto';
 import { UpdateQuestionOptionDto } from './dto/update-question-option.dto';
+import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
+import { UserRoles } from '@/db/enum/roles.enum';
 
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRoles.ADMIN)
 @Controller('question-options')
 export class QuestionOptionsController {
   constructor(private readonly questionOptionsService: QuestionOptionsService) {}

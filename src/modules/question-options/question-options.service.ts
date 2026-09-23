@@ -43,15 +43,17 @@ export class QuestionOptionsService {
   }
 
   async update(id: string, updateQuestionOptionDto: UpdateQuestionOptionDto) {
-    const questionOption = await this.findOne(id);
-
-    if (!questionOption) {
+    const exists = await this.repo.exists({ where: { id } });
+    if (!exists) {
       throw new HttpException(`Question option with id ${id} not found`, HttpStatus.NOT_FOUND);
     }
 
-    Object.assign(questionOption, updateQuestionOptionDto);
+    // update() directo sobre las columnas: con save() sobre una entidad que trae
+    // la relación `media` cargada, TypeORM usa esa relación en vez de `mediaId`
+    // y no se puede limpiar el media (mediaId: null) al pasar la opción a TEXT.
+    await this.repo.update(id, updateQuestionOptionDto);
 
-    return this.repo.save(questionOption);
+    return this.findOne(id);
   }
 
   async remove(id: string): Promise<DeleteResult> {
