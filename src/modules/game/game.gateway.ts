@@ -209,6 +209,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { questionId: string; answerId: string },
     @ConnectedSocket() client: ConnectionGameSocket,
   ) {
+    // Hora de llegada, antes de cualquier await: es la que se compara con la
+    // ventana [startsAt, endsAt + gracia] de la pregunta.
+    const receivedAt = Date.now();
     if (!data.questionId || !data.answerId) {
       throw new BadRequestException('missing questionId or anwerId');
     }
@@ -224,6 +227,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       data.questionId,
       data.answerId,
       userId,
+      receivedAt,
     );
 
     client.emit('answerResult', {
@@ -254,8 +258,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       throw new BadRequestException('missing roomId');
     }
 
-    await this.gameService.start(client.data.roomId, user.id);
-    this.server.to(client.data.roomId).emit('gameStarted');
+    const { firstQuestionAt } = await this.gameService.start(client.data.roomId, user.id);
+    this.server.to(client.data.roomId).emit('gameStarted', { firstQuestionAt });
 
     return { success: true };
   }
@@ -307,6 +311,16 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     return { success: true };
   }
 
+  /**
+   * Sincronización de reloj (estilo NTP/Cristian): el cliente manda su hora,
+   * recibe la del servidor en el ack y estima su offset con el RTT. Los
+   * startsAt/endsAt de las preguntas están en hora del servidor.
+   */
+  @SubscribeMessage('timeSync')
+  handleTimeSync() {
+    return { serverTime: Date.now() };
+  }
+
   @OnEvent('game.next-question')
   handleNextQuestion(payload: {
     roomId: string;
@@ -314,18 +328,29 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     questionNumber: number;
     totalQuestions: number;
     timeLimit: number;
+    startsAt: number;
+    endsAt: number;
   }) {
     this.server.to(payload.roomId).emit('newQuestion', {
       question: payload.question,
       questionNumber: payload.questionNumber,
       totalQuestions: payload.totalQuestions,
       timeLimit: payload.timeLimit,
+      startsAt: payload.startsAt,
+      endsAt: payload.endsAt,
     });
   }
 
   @OnEvent('game.question-ended')
-  handleQuestionEnded(payload: { roomId: string }) {
-    this.server.to(payload.roomId).emit('questionEnded');
+  handleQuestionEnded(payload: {
+    roomId: string;
+    questionId: string;
+    nextQuestionAt: number | null;
+  }) {
+    this.server.to(payload.roomId).emit('questionEnded', {
+      questionId: payload.questionId,
+      nextQuestionAt: payload.nextQuestionAt,
+    });
   }
 
   @OnEvent('game.finished')

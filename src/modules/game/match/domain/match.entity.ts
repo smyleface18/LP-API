@@ -2,6 +2,7 @@ import { Question, User } from '@/db/entities';
 import { MatchStatus, ModeMatch, PlayerInfo, RecordedAnswer } from './match.interface';
 import { Level } from '@/db/enum/question.enum';
 import { QuestionNotFoundError } from './exceptions/question-not-found.error';
+import { ANSWER_GRACE_MS } from '../../game-timing';
 
 export class Match {
   private readonly roomId: string;
@@ -14,8 +15,14 @@ export class Match {
   private readonly mode: ModeMatch;
   // Una respuesta por jugador y pregunta; se persisten al terminar la partida.
   private answers: RecordedAnswer[] = [];
-  // Epoch ms en que se envió la pregunta activa (para calcular timeTaken).
-  private questionStartedAt: number | null = null;
+  // Ventana de la pregunta activa en epoch ms (hora del servidor): se muestra en
+  // `questionStartsAt` y se aceptan respuestas hasta `questionEndsAt` + gracia.
+  private questionStartsAt: number | null = null;
+  private questionEndsAt: number | null = null;
+  // Número de fase: sube en cada transición (inicio, pregunta, cierre). Los
+  // jobs del scheduler lo llevan; uno con seq viejo (duplicado, reintento,
+  // partida anterior) se descarta. No se reinicia en la revancha a propósito.
+  private seq = 0;
   // Evita guardar dos veces el resultado si finishMatch se dispara más de una vez.
   private resultsPersisted = false;
   // userIds que pidieron revancha tras terminar la partida.
@@ -100,7 +107,8 @@ export class Match {
     return Array.from(this.players.values());
   }
 
-  sendNextQuestion(): Question | null {
+  /** Activa la siguiente pregunta con su ventana [startsAt, endsAt] en hora del servidor. */
+  sendNextQuestion(startsAt: number, endsAt: number): Question | null {
     if (this.currentQuestionIndex >= this.questions.length) {
       this.setStatus(MatchStatus.FINISHED);
       return null;
@@ -109,9 +117,31 @@ export class Match {
     const question = this.questions[this.currentQuestionIndex];
     this.currentQuestionIndex++;
     this.setStatus(MatchStatus.QUESTION_ACTIVE);
-    this.questionStartedAt = Date.now();
+    this.questionStartsAt = startsAt;
+    this.questionEndsAt = endsAt;
+    this.seq++;
 
     return question;
+  }
+
+  getSeq(): number {
+    return this.seq;
+  }
+
+  getQuestionWindow(): { startsAt: number; endsAt: number } | null {
+    if (this.questionStartsAt === null || this.questionEndsAt === null) return null;
+    return { startsAt: this.questionStartsAt, endsAt: this.questionEndsAt };
+  }
+
+  /** Si una respuesta recibida en `now` (hora del servidor) entra en la ventana de la pregunta activa. */
+  isAcceptingAnswers(now: number): boolean {
+    const window = this.getQuestionWindow();
+    return (
+      this.status === MatchStatus.QUESTION_ACTIVE &&
+      window !== null &&
+      now >= window.startsAt &&
+      now <= window.endsAt + ANSWER_GRACE_MS
+    );
   }
 
   hasPlayer(userId: string): boolean {
@@ -128,8 +158,14 @@ export class Match {
     return this.answers.some((a) => a.questionId === questionId && a.userId === userId);
   }
 
-  recordAnswer(questionId: string, userId: string, optionId: string, isCorrect: boolean) {
-    const elapsedMs = this.questionStartedAt ? Date.now() - this.questionStartedAt : 0;
+  recordAnswer(
+    questionId: string,
+    userId: string,
+    optionId: string,
+    isCorrect: boolean,
+    now: number,
+  ) {
+    const elapsedMs = this.questionStartsAt !== null ? now - this.questionStartsAt : 0;
     this.answers.push({
       questionId,
       userId,
@@ -177,6 +213,7 @@ export class Match {
   finishCurrentQuestion() {
     if (this.status === MatchStatus.QUESTION_ACTIVE) {
       this.setStatus(MatchStatus.BETWEEN_QUESTIONS);
+      this.seq++;
     }
 
     if (this.currentQuestionIndex >= this.questions.length) {
@@ -224,13 +261,20 @@ export class Match {
 
   start() {
     this.setStatus(MatchStatus.STARTING);
+    this.seq++;
+  }
+
+  finish() {
+    this.setStatus(MatchStatus.FINISHED);
+    this.seq++;
   }
 
   resetForRematch() {
     this.currentQuestionIndex = 0;
     this.status = MatchStatus.WAITING;
     this.answers = [];
-    this.questionStartedAt = null;
+    this.questionStartsAt = null;
+    this.questionEndsAt = null;
     this.resultsPersisted = false;
     this.rematchVotes.clear();
     this.players.forEach((player) => {
@@ -269,7 +313,9 @@ export class Match {
       questions: this.questions,
       owner: this.owner,
       answers: this.answers,
-      questionStartedAt: this.questionStartedAt,
+      questionStartsAt: this.questionStartsAt,
+      questionEndsAt: this.questionEndsAt,
+      seq: this.seq,
       resultsPersisted: this.resultsPersisted,
       rematchVotes: Array.from(this.rematchVotes),
     };
@@ -371,8 +417,14 @@ export class Match {
     if (Array.isArray(snapshot.answers)) {
       match.answers = snapshot.answers as RecordedAnswer[];
     }
-    if (typeof snapshot.questionStartedAt === 'number') {
-      match.questionStartedAt = snapshot.questionStartedAt;
+    if (typeof snapshot.questionStartsAt === 'number') {
+      match.questionStartsAt = snapshot.questionStartsAt;
+    }
+    if (typeof snapshot.questionEndsAt === 'number') {
+      match.questionEndsAt = snapshot.questionEndsAt;
+    }
+    if (typeof snapshot.seq === 'number') {
+      match.seq = snapshot.seq;
     }
     match.resultsPersisted = snapshot.resultsPersisted === true;
     if (Array.isArray(snapshot.rematchVotes)) {

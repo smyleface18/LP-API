@@ -20,11 +20,6 @@ export interface JoinGameDto {
   roomId: string;
 }
 
-export interface TimeoutDto {
-  roomId: string;
-  timeLimit: number;
-}
-
 export interface AnswerQuestionDto {
   questionId: string;
   answerId: string;

@@ -8,13 +8,32 @@ import { UniqueNamesAdapter } from '@/common/src/unique-names/unique-names.adapt
 import { v4 } from 'uuid';
 import { LockHandle } from '@/common/src/redis/redis-lock.service';
 import { Question, QuestionOption, User } from '@/db/entities';
-import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AnswerProcessResultDto } from '../types';
 import { MatchResultsService } from './match-results.service';
 import { MatchStore } from './match.store';
+import { ANSWER_GRACE_MS, MIN_QUESTION_LEAD_MS, QUESTION_LEAD_MS, REVEAL_MS } from '../game-timing';
 
 // Reintentos si el nombre de sala generado ya está en uso por otra partida.
 const MAX_ROOM_ID_ATTEMPTS = 5;
+
+export type PublishResult =
+  | { kind: 'stale' }
+  | { kind: 'finished' }
+  | {
+      kind: 'question';
+      seq: number;
+      question: QuestionDto;
+      questionNumber: number;
+      totalQuestions: number;
+      startsAt: number;
+      endsAt: number;
+    };
+
+export type CloseResult =
+  | { kind: 'stale' }
+  /** El job se disparó antes de tiempo (skew de reloj entre instancias): reprogramar. */
+  | { kind: 'early'; seq: number; dueAt: number }
+  | { kind: 'closed'; seq: number; questionId: string; hasNext: boolean; nextPlannedAt: number };
 
 export interface RematchVote {
   accepted: number;
@@ -33,7 +52,6 @@ export class MatchService {
     private readonly store: MatchStore,
     private readonly questionService: QuestionService,
     private readonly uniqueNames: UniqueNamesAdapter,
-    private readonly eventEmitter: EventEmitter2,
     private readonly matchResults: MatchResultsService,
   ) {}
 
@@ -104,34 +122,85 @@ export class MatchService {
     return Match.fromPersistence(match);
   }
 
-  async nextQuestion(roomId: string): Promise<QuestionDto | null> {
-    return this.store.withRoomLock(roomId, (lock) => this.nextQuestionLocked(roomId, lock));
+  /**
+   * Publica la siguiente pregunta con una ventana absoluta en hora del servidor.
+   * `plannedAt` es cuándo debía correr este paso según la línea de tiempo (no
+   * cuándo corrió el job): anclar ahí evita que los atrasos del scheduler se
+   * acumulen pregunta tras pregunta.
+   */
+  async publishNextQuestion(
+    roomId: string,
+    seq: number,
+    plannedAt: number,
+    now: number,
+  ): Promise<PublishResult> {
+    return this.store.withRoomLock(roomId, async (lock) => {
+      const match = await this.getMatch(roomId);
+      const status = match.getStatus();
+      if (
+        match.getSeq() !== seq ||
+        (status !== MatchStatus.STARTING && status !== MatchStatus.BETWEEN_QUESTIONS)
+      ) {
+        return { kind: 'stale' };
+      }
+
+      if (!match.hasNextQuestion() || match.isRoomEmpty()) {
+        match.finish();
+        await this.store.save(match, lock);
+        return { kind: 'finished' };
+      }
+
+      // Si el scheduler se atrasó, igual se deja un mínimo de antelación para
+      // que la pregunta llegue a todos antes de mostrarse.
+      const startsAt = Math.max(plannedAt + QUESTION_LEAD_MS, now + MIN_QUESTION_LEAD_MS);
+      const nextQuestion = match.getQuestions()[match.getcurrentQuestionIndex()];
+      const endsAt = startsAt + nextQuestion.timeLimit * 1000;
+      const question = match.sendNextQuestion(startsAt, endsAt)!;
+
+      await this.store.save(match, lock);
+
+      return {
+        kind: 'question',
+        seq: match.getSeq(),
+        question: this.toQuestionDto(question),
+        questionNumber: match.getcurrentQuestionIndex(),
+        totalQuestions: match.getQuestions().length,
+        startsAt,
+        endsAt,
+      };
+    });
   }
 
-  private async nextQuestionLocked(roomId: string, lock: LockHandle): Promise<QuestionDto | null> {
-    const match = await this.getMatch(roomId);
-    const question = match.sendNextQuestion();
+  /** Cierra la pregunta activa cuando vence su ventana (endsAt + gracia). */
+  async closeQuestion(roomId: string, seq: number, now: number): Promise<CloseResult> {
+    return this.store.withRoomLock(roomId, async (lock) => {
+      const match = await this.getMatch(roomId);
+      const window = match.getQuestionWindow();
+      const question = match.getActiveQuestion();
+      if (match.getSeq() !== seq || !window || !question) {
+        return { kind: 'stale' };
+      }
 
-    if (match.isRoomEmpty()) {
-      this.eventEmitter.emit('game.finished', {
-        roomId,
-      });
-      return null;
-    }
+      const closeAt = window.endsAt + ANSWER_GRACE_MS;
+      if (now < closeAt) {
+        return { kind: 'early', seq, dueAt: closeAt };
+      }
 
-    if (question) {
-      this.eventEmitter.emit('question.started', {
-        roomId: match.getRoomId(),
-        timeLimit: question.timeLimit,
-      });
-    }
+      match.finishCurrentQuestion();
+      await this.store.save(match, lock);
 
-    await this.store.save(match, lock);
-
-    return question ? this.toQuestionDto(question) : null;
+      return {
+        kind: 'closed',
+        seq: match.getSeq(),
+        questionId: question.id,
+        hasNext: match.hasNextQuestion(),
+        // Anclado al cierre planeado, no a `now`: sin deriva acumulada.
+        nextPlannedAt: closeAt + REVEAL_MS,
+      };
+    });
   }
 
-  async startMatch(roomId: string, userId: string): Promise<MatchStatus> {
+  async startMatch(roomId: string, userId: string): Promise<{ seq: number }> {
     return this.store.withRoomLock(roomId, (lock) => this.startMatchLocked(roomId, userId, lock));
   }
 
@@ -139,7 +208,7 @@ export class MatchService {
     roomId: string,
     userId: string,
     lock: LockHandle,
-  ): Promise<MatchStatus> {
+  ): Promise<{ seq: number }> {
     const match = await this.getMatch(roomId);
 
     if (match.getOwner().id != userId) {
@@ -156,7 +225,7 @@ export class MatchService {
 
     await this.store.save(match, lock);
 
-    return match.getStatus();
+    return { seq: match.getSeq() };
   }
 
   /**
@@ -189,25 +258,12 @@ export class MatchService {
     });
   }
 
-  async finishCurrentQuestion(roomId: string): Promise<Match> {
-    return this.store.withRoomLock(roomId, async (lock) => {
-      const match = await this.getMatch(roomId);
-      match.finishCurrentQuestion();
-      await this.store.save(match, lock);
-      return match;
-    });
-  }
-
-  async hasNextQuestion(roomId: string): Promise<boolean> {
-    const match = await this.getMatch(roomId);
-    return match.hasNextQuestion();
-  }
-
   async processAnswer(
     roomId: string,
     questionId: string,
     answerId: string,
     userId: string,
+    receivedAt: number = Date.now(),
   ): Promise<AnswerProcessResultDto> {
     return this.store.withRoomLock(roomId, async (lock) => {
       const match = await this.getMatch(roomId);
@@ -216,11 +272,15 @@ export class MatchService {
         throw new BadRequestException('You are not a player in this match');
       }
 
-      // Solo se acepta respuesta para la pregunta activa: la cola de timeout
-      // pasa el match a BETWEEN_QUESTIONS al vencer el timeLimit, así que esto
-      // también rechaza respuestas fuera de tiempo o a preguntas pasadas/futuras.
+      // Se valida contra la ventana absoluta de la pregunta (hora de llegada al
+      // servidor), no contra el estado: aunque el job de cierre corra tarde, una
+      // respuesta fuera de [startsAt, endsAt + gracia] se rechaza igual.
       const activeQuestion = match.getActiveQuestion();
-      if (!activeQuestion || activeQuestion.id !== questionId) {
+      if (
+        !activeQuestion ||
+        activeQuestion.id !== questionId ||
+        !match.isAcceptingAnswers(receivedAt)
+      ) {
         throw new BadRequestException('This question is not accepting answers');
       }
 
@@ -234,7 +294,7 @@ export class MatchService {
       }
 
       const correctAnswers = activeQuestion.options.filter((op) => op.isCorrect);
-      match.recordAnswer(questionId, userId, answer.id, answer.isCorrect);
+      match.recordAnswer(questionId, userId, answer.id, answer.isCorrect, receivedAt);
       match.addScore(userId, answer.isCorrect ? 100 : 0);
       await this.store.save(match, lock);
 
