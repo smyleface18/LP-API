@@ -6,10 +6,17 @@ import { MatchModule } from './match/match.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ENTITIES } from '@/db/database.module';
 import { WsAuthModule } from '@/common/src/ws-auth/ws-auth.module';
+import { MediaModule } from '../media/media.module';
 
 @Module({
   providers: [GameGateway, GameService],
-  imports: [QuestionModule, MatchModule, WsAuthModule, TypeOrmModule.forFeature(ENTITIES)],
+  imports: [
+    QuestionModule,
+    MatchModule,
+    WsAuthModule,
+    TypeOrmModule.forFeature(ENTITIES),
+    MediaModule,
+  ],
   exports: [GameService],
 })
 export class GameModule {}

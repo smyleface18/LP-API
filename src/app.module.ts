@@ -12,6 +12,7 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
 import { GameQueueModule } from './modules/game/queue/game-queue.module';
 import { WsAuthModule } from './common/src/ws-auth/ws-auth.module';
 import { CommonModule } from './common/common.module';
+import { MediaModule } from './modules/media/media.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { CommonModule } from './common/common.module';
     EventEmitterModule.forRoot(),
     GameQueueModule,
     WsAuthModule,
+    MediaModule,
   ],
   controllers: [AppController],
   providers: [AppService],

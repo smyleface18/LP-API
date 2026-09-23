@@ -5,12 +5,14 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Question } from '@/db/entities';
 import { In, Repository } from 'typeorm';
 import { Level } from '@/db/enum/question.enum';
+import { MediaService } from '../media/media.service';
 
 @Injectable()
 export class QuestionService {
   constructor(
     @InjectRepository(Question)
     private readonly repo: Repository<Question>,
+    private readonly mediaService: MediaService,
   ) {}
 
   async create(createQuestionDto: CreateQuestionDto) {
@@ -18,16 +20,20 @@ export class QuestionService {
   }
 
   async findAll() {
-    return await this.repo.find({
+    const questions = await this.repo.find({
       relations: ['category', 'options', 'media', 'options.media'],
     });
+
+    return Promise.all(questions.map((question) => this.signQuestionMedia(question)));
   }
 
   async findOne(id: string) {
-    return await this.repo.findOne({
+    const question = await this.repo.findOne({
       where: { id },
       relations: ['category', 'options', 'media', 'options.media'],
     });
+
+    return question ? this.signQuestionMedia(question) : question;
   }
 
   async createMany(createQuestionDtos: CreateQuestionDto[]) {
@@ -61,8 +67,10 @@ export class QuestionService {
       relations: ['category', 'options', 'media', 'options.media'],
     });
 
+    const signedQuestions = await Promise.all(questions.map((q) => this.signQuestionMedia(q)));
+
     return this.shuffle(
-      questions.map((q) => ({
+      signedQuestions.map((q) => ({
         ...q,
         options: this.shuffle(q.options),
       })),
@@ -74,5 +82,23 @@ export class QuestionService {
       .map((value) => ({ value, sort: Math.random() }))
       .sort((a, b) => a.sort - b.sort)
       .map(({ value }) => value);
+  }
+
+  /**
+   * Reemplaza `media.url` (Question y cada QuestionOption) por una URL de
+   * lectura firmada y fresca — nunca se sirve la que quedó guardada en BD.
+   */
+  private async signQuestionMedia(question: Question): Promise<Question> {
+    const [media, options] = await Promise.all([
+      this.mediaService.signUrl(question.media),
+      Promise.all(
+        (question.options ?? []).map(async (option) => ({
+          ...option,
+          media: await this.mediaService.signUrl(option.media),
+        })),
+      ),
+    ]);
+
+    return { ...question, media, options };
   }
 }

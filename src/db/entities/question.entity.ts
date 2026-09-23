@@ -8,7 +8,7 @@ import { MediaAsset } from './media-asset.entity';
 import { ContentType } from '../enum/question.enum';
 @Entity()
 @Check(
-  `("contentType" = 'TEXT' AND "media_id" IS NULL AND "text" IS NOT NULL) OR ("contentType" != 'TEXT' AND "media_id" IS NOT NULL AND "text" IS NULL)`,
+  `("contentType" = 'TEXT' AND "media_id" IS NULL) OR ("contentType" != 'TEXT' AND "media_id" IS NOT NULL)`,
 )
 export class Question extends CoreEntity {
   @IsEnum(ContentType)
@@ -18,10 +18,14 @@ export class Question extends CoreEntity {
   })
   contentType!: ContentType;
 
-  @IsOptional()
+  // El enunciado de la pregunta en sí (ej. "¿Cómo se dice 'beber' en inglés?" o,
+  // si contentType es AUDIO/IMAGE/VIDEO, "¿Qué palabra es la que dicen en el audio?").
+  // Siempre es obligatorio, sea cual sea el contentType — el media es el contenido
+  // acompañante, no reemplaza el enunciado.
+  @IsNotEmpty()
   @IsString()
-  @Column({ type: 'text', nullable: true })
-  text?: string;
+  @Column({ type: 'text' })
+  text!: string;
 
   @IsOptional()
   @Column({ type: 'text', nullable: true })

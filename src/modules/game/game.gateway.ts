@@ -19,6 +19,7 @@ import { MatchStatus, QuestionDto } from './match/domain/match.interface';
 import { OnEvent } from '@nestjs/event-emitter';
 import { WsAuthService } from '@/common/src/ws-auth/ws-auth.service';
 import { GameService } from './game.service';
+import { MediaService } from '../media/media.service';
 
 @WebSocketGateway({
   namespace: '/game',
@@ -39,6 +40,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly userRepository: Repository<User>,
     private readonly wsAuthService: WsAuthService,
     private readonly gameService: GameService,
+    private readonly mediaService: MediaService,
   ) {}
 
   async handleConnection(
@@ -67,6 +69,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         client.data.userId,
         '- username:',
         payload.username,
+        '- rol',
+        payload['cognito:groups'],
       );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -112,18 +116,26 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       where: {
         id: client.data.userId,
       },
+      relations: ['avatar'],
     });
 
     if (!user) {
       throw new BadRequestException('user not found');
     }
 
+    // Match toma el avatar de `owner.avatar?.url` en su constructor, así que
+    // hay que firmarlo ANTES de crear el match (no sirve firmarlo después:
+    // el owner ya quedaría agregado con la URL sin firmar).
+    const signedAvatar = await this.mediaService.signUrl(user.avatar);
+
     const match = await this.matchService.createMatch(
       createGameDto.level,
       createGameDto.modeMatch,
-      user,
+      {
+        ...user,
+        avatar: signedAvatar,
+      },
     );
-    match.addPlayer(user.id, user.username, user.level, user.score, user.avatar?.url);
 
     console.log('roomId del match:', match.getRoomId());
     console.log('rooms antes del join:', [...client.rooms]);
@@ -158,6 +170,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       where: {
         id: client.data.userId,
       },
+      relations: ['avatar'],
     });
 
     if (!user) {
@@ -170,6 +183,8 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       throw new BadRequestException('The game has already started.');
     }
 
+    const avatar = await this.mediaService.signUrl(user.avatar);
+
     // joinMatch returns the updated match with the new player added
     const updatedMatch = await this.matchService.joinMatch(
       joinGameDto.roomId,
@@ -177,7 +192,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       user.username,
       user.level,
       user.score,
-      user.avatar?.url,
+      avatar?.url,
     );
 
     await client.join(joinGameDto.roomId);

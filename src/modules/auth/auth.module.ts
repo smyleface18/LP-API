@@ -5,12 +5,14 @@ import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './jwt.strategy';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ENTITIES } from '@/db/database.module';
+import { MediaModule } from '../media/media.module';
 
 @Module({
   controllers: [AuthController],
   imports: [
     PassportModule.register({ defaultStrategy: 'jwt' }),
     TypeOrmModule.forFeature(ENTITIES),
+    MediaModule,
   ],
   providers: [AuthService, JwtStrategy],
   exports: [PassportModule],

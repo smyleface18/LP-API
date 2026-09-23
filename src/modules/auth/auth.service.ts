@@ -15,6 +15,7 @@ import { Repository } from 'typeorm';
 import { User } from '@/db/entities';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EnvsService } from '@/common/src/envs/envs.service';
+import { MediaService } from '../media/media.service';
 
 @Injectable()
 export class AuthService {
@@ -25,6 +26,7 @@ export class AuthService {
     private envsService: EnvsService,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly mediaService: MediaService,
   ) {
     const { region, cognitoClientId } = this.envsService.awsConfig;
     this.clientId = cognitoClientId;
@@ -161,10 +163,13 @@ export class AuthService {
   }
 
   async me(id: string) {
-    return await this.userRepository.findOne({
-      where: {
-        id: id,
-      },
+    const user = await this.userRepository.findOne({
+      where: { id },
+      relations: ['avatar'],
     });
+
+    if (!user) return user;
+
+    return { ...user, avatar: await this.mediaService.signUrl(user.avatar) };
   }
 }

@@ -4,12 +4,14 @@ import { UpdateQuestionOptionDto } from './dto/update-question-option.dto';
 import { QuestionOption } from '@/db/entities/question-option.entity';
 import { DeleteResult, Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
+import { MediaService } from '../media/media.service';
 
 @Injectable()
 export class QuestionOptionsService {
   constructor(
     @InjectRepository(QuestionOption)
     private readonly repo: Repository<QuestionOption>,
+    private readonly mediaService: MediaService,
   ) {}
 
   async create(createQuestionOptionDto: CreateQuestionOptionDto): Promise<QuestionOption> {
@@ -21,7 +23,9 @@ export class QuestionOptionsService {
   }
 
   async findAll(): Promise<QuestionOption[]> {
-    return await this.repo.find();
+    const options = await this.repo.find({ relations: ['media'] });
+
+    return Promise.all(options.map((option) => this.signOptionMedia(option)));
   }
 
   async findOne(id: string): Promise<QuestionOption | null> {
@@ -29,12 +33,13 @@ export class QuestionOptionsService {
       where: {
         id: id,
       },
+      relations: ['media'],
     });
 
     if (!questionOption) {
       throw new HttpException(`question option with ${id} not found`, HttpStatus.NOT_FOUND);
     }
-    return questionOption;
+    return this.signOptionMedia(questionOption);
   }
 
   async update(id: string, updateQuestionOptionDto: UpdateQuestionOptionDto) {
@@ -51,5 +56,9 @@ export class QuestionOptionsService {
 
   async remove(id: string): Promise<DeleteResult> {
     return await this.repo.delete(id);
+  }
+
+  private async signOptionMedia(option: QuestionOption): Promise<QuestionOption> {
+    return { ...option, media: await this.mediaService.signUrl(option.media) };
   }
 }
