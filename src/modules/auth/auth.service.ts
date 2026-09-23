@@ -1,12 +1,19 @@
 import {
   AdminAddUserToGroupCommand,
+  AdminDeleteUserCommand,
   ChangePasswordCommand,
   CognitoIdentityProviderClient,
   InitiateAuthCommand,
   RevokeTokenCommand,
   SignUpCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
-import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { SignUpDto } from './dto/signUp.dto';
 import { v4 } from 'uuid';
 import { SignInDto } from './dto/signIn.dto';
@@ -16,9 +23,11 @@ import { User } from '@/db/entities';
 import { InjectRepository } from '@nestjs/typeorm';
 import { EnvsService } from '@/common/src/envs/envs.service';
 import { MediaService } from '../media/media.service';
+import { toSafeAuthError } from './cognito-errors';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   private cognitoClient: CognitoIdentityProviderClient;
   private clientId: string;
 
@@ -37,53 +46,73 @@ export class AuthService {
   }
 
   async signUp(signUpDto: SignUpDto) {
-    try {
-      const existingUser = await this.userRepository.findOne({
-        where: { email: signUpDto.email },
-      });
-      if (existingUser) {
-        throw new BadRequestException('Email already in use');
-        return;
-      }
-
-      const usernameId = v4();
-      const command = new SignUpCommand({
-        ClientId: this.clientId,
-        Username: usernameId,
-        Password: signUpDto.password,
-        UserAttributes: [
-          { Name: 'email', Value: signUpDto.email },
-          { Name: 'nickname', Value: signUpDto.username },
-        ],
-      });
-
-      const response = await this.cognitoClient.send(command);
-
-      // 2. Asignar grupo por defecto
-      const grupo = new AdminAddUserToGroupCommand({
-        UserPoolId: process.env.COGNITO_USER_POOL_ID,
-        GroupName: UserRoles.PLAYER,
-        Username: usernameId,
-      });
-
-      await this.cognitoClient.send(grupo);
-
-      const user = this.userRepository.create({
-        id: usernameId,
-        email: signUpDto.email,
-        username: signUpDto.username,
-      });
-
-      await this.userRepository.save(user);
-
-      return {
-        userSub: response.UserSub,
-        message:
-          'Usuario registrado. Por favor, revise su correo electrónico para obtener el código de verificación.',
-      };
-    } catch (error) {
-      throw new BadRequestException(error);
+    const existingUser = await this.userRepository.findOne({
+      where: { email: signUpDto.email },
+    });
+    if (existingUser) {
+      throw new BadRequestException('Email already in use');
     }
+
+    const usernameId = v4();
+    let userSub: string | undefined;
+    try {
+      const response = await this.cognitoClient.send(
+        new SignUpCommand({
+          ClientId: this.clientId,
+          Username: usernameId,
+          Password: signUpDto.password,
+          UserAttributes: [
+            { Name: 'email', Value: signUpDto.email },
+            { Name: 'nickname', Value: signUpDto.username },
+          ],
+        }),
+      );
+      userSub = response.UserSub;
+    } catch (error) {
+      throw toSafeAuthError(error, new BadRequestException('Could not register user'));
+    }
+
+    // Si falla algo después de crear el usuario en Cognito, se borra (acción
+    // compensatoria): si no, queda un usuario en Cognito sin fila en la BD, que
+    // puede iniciar sesión pero no jugar, y el email queda tomado.
+    try {
+      await this.cognitoClient.send(
+        new AdminAddUserToGroupCommand({
+          UserPoolId: process.env.COGNITO_USER_POOL_ID,
+          GroupName: UserRoles.PLAYER,
+          Username: usernameId,
+        }),
+      );
+
+      await this.userRepository.save(
+        this.userRepository.create({
+          id: usernameId,
+          email: signUpDto.email,
+          username: signUpDto.username,
+        }),
+      );
+    } catch (error) {
+      this.logger.error(`signUp failed after Cognito user creation: ${(error as Error).message}`);
+      await this.cognitoClient
+        .send(
+          new AdminDeleteUserCommand({
+            UserPoolId: process.env.COGNITO_USER_POOL_ID,
+            Username: usernameId,
+          }),
+        )
+        .catch((cleanupError: Error) =>
+          this.logger.error(
+            `could not roll back Cognito user ${usernameId}: ${cleanupError.message}`,
+          ),
+        );
+      throw new InternalServerErrorException('Could not register user, try again');
+    }
+
+    return {
+      userSub,
+      message:
+        'Usuario registrado. Por favor, revise su correo electrónico para obtener el código de verificación.',
+    };
   }
 
   async signIn(signInDto: SignInDto) {
@@ -105,7 +134,7 @@ export class AuthService {
         expiresIn: response.AuthenticationResult?.ExpiresIn,
       };
     } catch (e) {
-      throw new UnauthorizedException(e, 'Invalid credentials');
+      throw toSafeAuthError(e, new UnauthorizedException('Invalid credentials'));
     }
   }
 
@@ -127,7 +156,7 @@ export class AuthService {
         expiresIn: response.AuthenticationResult?.ExpiresIn,
       };
     } catch (e) {
-      throw new UnauthorizedException(e, 'Invalid refresh token');
+      throw toSafeAuthError(e, new UnauthorizedException('Invalid refresh token'));
     }
   }
 
@@ -143,7 +172,7 @@ export class AuthService {
 
       return { message: 'Password changed successfully' };
     } catch (error) {
-      throw new BadRequestException(error);
+      throw toSafeAuthError(error, new BadRequestException('Could not change password'));
     }
   }
 
@@ -158,7 +187,7 @@ export class AuthService {
 
       return { message: 'Token revoked successfully' };
     } catch (error) {
-      throw new BadRequestException(error);
+      throw toSafeAuthError(error, new BadRequestException('Could not revoke token'));
     }
   }
 
