@@ -7,4 +7,5 @@ export class CreateQuestionOptionDto extends OmitType(QuestionOption, [
   'updatedAt',
   'active',
   'question',
+  'media',
 ] as const) {}

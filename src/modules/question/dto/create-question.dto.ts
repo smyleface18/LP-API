@@ -9,4 +9,5 @@ export class CreateQuestionDto extends OmitType(Question, [
   'options',
   'games',
   'category',
+  'media',
 ] as const) {}

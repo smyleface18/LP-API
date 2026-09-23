@@ -5,3 +5,4 @@ export * from './question-option.entity';
 export * from './user.entity';
 export * from './game-session.entity';
 export * from './player-answer.entity';
+export * from './media-asset.entity';

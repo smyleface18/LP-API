@@ -1,6 +1,5 @@
-import { CategoryQuestion } from '@/db/entities';
-import { ContentObject } from '@/db/entities/model.core';
-import { Level } from '@/db/enum/question.enum';
+import { CategoryQuestion, MediaAsset } from '@/db/entities';
+import { ContentType, Level } from '@/db/enum/question.enum';
 
 export interface PlayerInfo {
   userId: string;
@@ -38,12 +37,16 @@ export interface MatchSnapshot {
 
 export interface OptionDto {
   id: string;
-  content: ContentObject;
+  contentType: ContentType;
+  text?: string;
+  media?: MediaAsset;
 }
 
 export interface QuestionDto {
   id: string;
-  content: ContentObject;
+  contentType: ContentType;
+  text?: string;
+  media?: MediaAsset;
   category: CategoryQuestion;
   options: OptionDto[];
   categoryId: string;

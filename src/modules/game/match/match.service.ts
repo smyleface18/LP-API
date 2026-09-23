@@ -202,7 +202,9 @@ export class MatchService {
 
     return {
       id: question.id,
-      content: question.content,
+      contentType: question.contentType,
+      text: question.text,
+      media: question.media,
       category: question.category,
       categoryId: question.categoryId,
       timeLimit: question.timeLimit,
@@ -213,7 +215,9 @@ export class MatchService {
   private toOptionDto(option: QuestionOption): OptionDto {
     return {
       id: option.id,
-      content: option.content,
+      contentType: option.contentType,
+      text: option.text,
+      media: option.media,
     };
   }
 }

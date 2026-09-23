@@ -7,7 +7,6 @@ import {
   SignUpCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { SignUpDto } from './dto/signUp.dto';
 import { v4 } from 'uuid';
 import { SignInDto } from './dto/signIn.dto';
@@ -15,6 +14,7 @@ import { UserRoles } from '@/db/enum/roles.enum';
 import { Repository } from 'typeorm';
 import { User } from '@/db/entities';
 import { InjectRepository } from '@nestjs/typeorm';
+import { EnvsService } from '@/common/src/envs/envs.service';
 
 @Injectable()
 export class AuthService {
@@ -22,12 +22,12 @@ export class AuthService {
   private clientId: string;
 
   constructor(
-    private configService: ConfigService,
+    private envsService: EnvsService,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
   ) {
-    const region = this.configService.get('AWS_REGION') as string;
-    this.clientId = this.configService.get('COGNITO_CLIENT_ID') as string;
+    const { region, cognitoClientId } = this.envsService.awsConfig;
+    this.clientId = cognitoClientId;
 
     this.cognitoClient = new CognitoIdentityProviderClient({
       region,

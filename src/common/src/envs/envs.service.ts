@@ -1,6 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+interface AwsEnvs {
+  region: string;
+  accessKeyId: string;
+  cognitoClientId: string;
+  secretAccessKey: string;
+  s3BucketName: string;
+}
+
 @Injectable()
 export class EnvsService {
   constructor(private readonly config: ConfigService) {}
@@ -39,6 +47,16 @@ export class EnvsService {
 
   get matchTtl(): number {
     return this.getNumber('MATCH_TTL', 3600);
+  }
+
+  get awsConfig(): AwsEnvs {
+    return {
+      region: this.getString('AWS_REGION'),
+      accessKeyId: this.getString('AWS_ACCESS_KEY_ID'),
+      secretAccessKey: this.getString('AWS_SECRET_ACCESS_KEY'),
+      s3BucketName: this.getString('AWS_S3_BUCKET_NAME'),
+      cognitoClientId: this.getString('COGNITO_CLIENT_ID'),
+    };
   }
 
   // Helpers para evitar valores undefined

@@ -1,17 +1,18 @@
-import { Column, Entity, OneToMany } from 'typeorm';
-import { CoreEntity, S3Object } from './model.core';
+import { Column, Entity, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
+import { CoreEntity } from './model.core';
 import {
   IsEmail,
   IsEnum,
   IsNotEmpty,
   IsNumber,
-  IsObject,
   IsOptional,
   IsString,
+  IsUUID,
 } from 'class-validator';
 import { Level } from '../enum/question.enum';
 import { UserRoles } from '../enum/roles.enum';
 import { GameSession } from './game-session.entity';
+import { MediaAsset } from './media-asset.entity';
 
 @Entity()
 export class User extends CoreEntity {
@@ -47,10 +48,14 @@ export class User extends CoreEntity {
   })
   level!: Level;
 
+  @ManyToOne(() => MediaAsset, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'avatar_id' })
+  avatar?: MediaAsset;
+
   @IsOptional()
-  @IsObject()
-  @Column({ type: 'json', nullable: true })
-  avatar!: S3Object;
+  @IsUUID()
+  @Column({ name: 'avatar_id', type: 'uuid', nullable: true })
+  avatarId?: string;
 
   @OneToMany(() => GameSession, (gameSession) => gameSession.user)
   gameSessions!: GameSession[];

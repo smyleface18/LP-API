@@ -19,14 +19,14 @@ export class QuestionService {
 
   async findAll() {
     return await this.repo.find({
-      relations: ['category', 'options'],
+      relations: ['category', 'options', 'media', 'options.media'],
     });
   }
 
   async findOne(id: string) {
     return await this.repo.findOne({
       where: { id },
-      relations: ['category', 'options'],
+      relations: ['category', 'options', 'media', 'options.media'],
     });
   }
 
@@ -58,7 +58,7 @@ export class QuestionService {
 
     const questions = await this.repo.find({
       where: { id: In(ids) },
-      relations: ['category', 'options'],
+      relations: ['category', 'options', 'media', 'options.media'],
     });
 
     return this.shuffle(

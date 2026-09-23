@@ -44,15 +44,6 @@ export class QuestionOptionsService {
       throw new HttpException(`Question option with id ${id} not found`, HttpStatus.NOT_FOUND);
     }
 
-    const content = updateQuestionOptionDto.content ?? questionOption.content;
-
-    if (!content) {
-      throw new HttpException(
-        'mediaUrl is required when renderType is AUDIO, IMAGE or VIDEO',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
-
     Object.assign(questionOption, updateQuestionOptionDto);
 
     return this.repo.save(questionOption);
