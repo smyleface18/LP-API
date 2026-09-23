@@ -12,6 +12,15 @@ export interface PlayerInfo {
   avatar?: string;
 }
 
+export interface RecordedAnswer {
+  questionId: string;
+  userId: string;
+  optionId: string;
+  isCorrect: boolean;
+  /** Segundos desde que se envió la pregunta. */
+  timeTaken: number;
+}
+
 export enum ModeMatch {
   SINGLEPLAYER = 'SINGLEPLAYER',
   MULTIPLAYER = 'MULTIPLAYER',

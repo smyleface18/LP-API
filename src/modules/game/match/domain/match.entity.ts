@@ -1,5 +1,5 @@
 import { Question, User } from '@/db/entities';
-import { MatchStatus, ModeMatch, PlayerInfo } from './match.interface';
+import { MatchStatus, ModeMatch, PlayerInfo, RecordedAnswer } from './match.interface';
 import { Level } from '@/db/enum/question.enum';
 import { QuestionNotFoundError } from './exceptions/question-not-found.error';
 
@@ -12,6 +12,12 @@ export class Match {
   private readonly questions: Question[];
   private readonly difficulty: Level;
   private readonly mode: ModeMatch;
+  // Una respuesta por jugador y pregunta; se persisten al terminar la partida.
+  private answers: RecordedAnswer[] = [];
+  // Epoch ms en que se envió la pregunta activa (para calcular timeTaken).
+  private questionStartedAt: number | null = null;
+  // Evita guardar dos veces el resultado si finishMatch se dispara más de una vez.
+  private resultsPersisted = false;
 
   constructor(
     roomId: string,
@@ -101,8 +107,54 @@ export class Match {
     const question = this.questions[this.currentQuestionIndex];
     this.currentQuestionIndex++;
     this.setStatus(MatchStatus.QUESTION_ACTIVE);
+    this.questionStartedAt = Date.now();
 
     return question;
+  }
+
+  hasPlayer(userId: string): boolean {
+    return this.players.has(userId);
+  }
+
+  /** La pregunta que se está respondiendo ahora (la última enviada), o null si no hay ninguna activa. */
+  getActiveQuestion(): Question | null {
+    if (this.status !== MatchStatus.QUESTION_ACTIVE || this.currentQuestionIndex === 0) return null;
+    return this.questions[this.currentQuestionIndex - 1] ?? null;
+  }
+
+  hasAnswered(questionId: string, userId: string): boolean {
+    return this.answers.some((a) => a.questionId === questionId && a.userId === userId);
+  }
+
+  recordAnswer(questionId: string, userId: string, optionId: string, isCorrect: boolean) {
+    const elapsedMs = this.questionStartedAt ? Date.now() - this.questionStartedAt : 0;
+    this.answers.push({
+      questionId,
+      userId,
+      optionId,
+      isCorrect,
+      timeTaken: Math.max(0, Math.round(elapsedMs / 1000)),
+    });
+  }
+
+  getAnswers(): RecordedAnswer[] {
+    return this.answers;
+  }
+
+  areResultsPersisted(): boolean {
+    return this.resultsPersisted;
+  }
+
+  markResultsPersisted() {
+    this.resultsPersisted = true;
+  }
+
+  /** Refleja en los jugadores el score total ya guardado en BD. */
+  applyTotalScores(totals: Map<string, number>) {
+    totals.forEach((total, userId) => {
+      const player = this.players.get(userId);
+      if (player) player.totalScore = total;
+    });
   }
 
   addScore(userId: string, points: number) {
@@ -167,6 +219,9 @@ export class Match {
   resetForRematch() {
     this.currentQuestionIndex = 0;
     this.status = MatchStatus.WAITING;
+    this.answers = [];
+    this.questionStartedAt = null;
+    this.resultsPersisted = false;
     this.players.forEach((player) => {
       player.matchScore = 0;
       player.isConnected = true;
@@ -202,6 +257,9 @@ export class Match {
       players: Array.from(this.players.entries()),
       questions: this.questions,
       owner: this.owner,
+      answers: this.answers,
+      questionStartedAt: this.questionStartedAt,
+      resultsPersisted: this.resultsPersisted,
     };
   }
 
@@ -296,6 +354,15 @@ export class Match {
     }
 
     match.players = playersMap;
+
+    // Campos opcionales: snapshots guardados antes de que existieran no los traen.
+    if (Array.isArray(snapshot.answers)) {
+      match.answers = snapshot.answers as RecordedAnswer[];
+    }
+    if (typeof snapshot.questionStartedAt === 'number') {
+      match.questionStartedAt = snapshot.questionStartedAt;
+    }
+    match.resultsPersisted = snapshot.resultsPersisted === true;
 
     return match;
   }

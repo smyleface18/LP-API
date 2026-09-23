@@ -11,14 +11,23 @@ import { v4 } from 'uuid';
 import { Question, QuestionOption, User } from '@/db/entities';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AnswerProcessResultDto } from '../types';
+import { MatchResultsService } from './match-results.service';
 
 @Injectable()
 export class MatchService {
+  // Cola de operaciones por sala: cada mutación hace get -> modificar -> set sobre
+  // la cache, así que dos operaciones concurrentes en la misma sala (ej. dos
+  // jugadores respondiendo a la vez) se pisarían y una se perdería. Solo
+  // serializa dentro de este proceso; con varias instancias haría falta un
+  // lock distribuido en Redis.
+  private readonly roomLocks = new Map<string, Promise<unknown>>();
+
   constructor(
     private readonly cache: CacheService,
     private readonly questionService: QuestionService,
     private readonly uniqueNames: UniqueNamesAdapter,
     private readonly eventEmitter: EventEmitter2,
+    private readonly matchResults: MatchResultsService,
   ) {}
 
   async createMatch(difficulty: Level, mode: ModeMatch, owner: User): Promise<Match> {
@@ -50,35 +59,40 @@ export class MatchService {
     totalScore: number = 0,
     avatar?: string,
   ): Promise<Match> {
-    const match = await this.getMatch(roomId);
+    return this.withRoomLock(roomId, async () => {
+      const match = await this.getMatch(roomId);
 
-    match.addPlayer(userId, username, level, totalScore, avatar);
-    await this.saveMatch(match);
+      match.addPlayer(userId, username, level, totalScore, avatar);
+      await this.saveMatch(match);
 
-    return match;
+      return match;
+    });
   }
 
   async disconnectUser(userId: string, roomId: string): Promise<Match> {
-    const match = await this.getMatch(roomId);
-    if (!match) {
-      throw new MatchNotFoundError(roomId);
-    }
+    return this.withRoomLock(roomId, async () => {
+      const match = await this.getMatch(roomId);
 
-    match.disconnectPlayer(userId);
-    await this.saveMatch(match);
+      match.disconnectPlayer(userId);
+      await this.saveMatch(match);
 
-    return match;
+      return match;
+    });
   }
 
   async finishMatch(roomId: string) {
-    const match = await this.getMatch(roomId);
-    if (!match) {
-      throw new MatchNotFoundError(roomId);
-    }
+    return this.withRoomLock(roomId, async () => {
+      const match = await this.getMatch(roomId);
 
-    const results = match.getResults();
+      if (!match.areResultsPersisted()) {
+        const totals = await this.matchResults.persist(match);
+        match.applyTotalScores(totals);
+        match.markResultsPersisted();
+        await this.saveMatch(match);
+      }
 
-    return results;
+      return match.getResults();
+    });
   }
 
   async getMatch(roomId: string): Promise<Match> {
@@ -91,6 +105,10 @@ export class MatchService {
   }
 
   async nextQuestion(roomId: string): Promise<QuestionDto | null> {
+    return this.withRoomLock(roomId, () => this.nextQuestionUnlocked(roomId));
+  }
+
+  private async nextQuestionUnlocked(roomId: string): Promise<QuestionDto | null> {
     const match = await this.getMatch(roomId);
     const question = match.sendNextQuestion();
 
@@ -114,6 +132,10 @@ export class MatchService {
   }
 
   async startMatch(roomId: string, userId: string): Promise<MatchStatus> {
+    return this.withRoomLock(roomId, () => this.startMatchUnlocked(roomId, userId));
+  }
+
+  private async startMatchUnlocked(roomId: string, userId: string): Promise<MatchStatus> {
     const match = await this.getMatch(roomId);
 
     if (match.getOwner().id != userId) {
@@ -134,21 +156,25 @@ export class MatchService {
   }
 
   async resetForRematch(roomId: string): Promise<Match> {
-    const match = await this.getMatch(roomId);
-    if (match.getStatus() !== MatchStatus.FINISHED) {
-      throw new BadRequestException('The game is not finished yet.');
-    }
+    return this.withRoomLock(roomId, async () => {
+      const match = await this.getMatch(roomId);
+      if (match.getStatus() !== MatchStatus.FINISHED) {
+        throw new BadRequestException('The game is not finished yet.');
+      }
 
-    match.resetForRematch();
-    await this.saveMatch(match);
-    return match;
+      match.resetForRematch();
+      await this.saveMatch(match);
+      return match;
+    });
   }
 
   async finishCurrentQuestion(roomId: string): Promise<Match> {
-    const match = await this.getMatch(roomId);
-    match.finishCurrentQuestion();
-    await this.saveMatch(match);
-    return match;
+    return this.withRoomLock(roomId, async () => {
+      const match = await this.getMatch(roomId);
+      match.finishCurrentQuestion();
+      await this.saveMatch(match);
+      return match;
+    });
   }
 
   async hasNextQuestion(roomId: string): Promise<boolean> {
@@ -162,21 +188,41 @@ export class MatchService {
     answerId: string,
     userId: string,
   ): Promise<AnswerProcessResultDto> {
-    const match = await this.getMatch(roomId);
-    const answer = match.getQuestionById(questionId).options.find((op) => op.id == answerId);
-    if (!answer) {
-      throw new BadRequestException('Invalid answerId');
-    }
-    const correctAnswers = match.getQuestionById(questionId).options.filter((op) => op.isCorrect);
-    match.addScore(userId, answer.isCorrect ? 100 : 0);
-    console.log(`addscore userId: ${userId}, points: ${answer.isCorrect ? 100 : 0}`);
-    console.log(match.getPlayersWithInfo());
-    await this.saveMatch(match);
-    return {
-      isCorrect: answer.isCorrect,
-      correctAnswer: correctAnswers,
-      playersScores: match.getPlayersWithInfo(),
-    };
+    return this.withRoomLock(roomId, async () => {
+      const match = await this.getMatch(roomId);
+
+      if (!match.hasPlayer(userId)) {
+        throw new BadRequestException('You are not a player in this match');
+      }
+
+      // Solo se acepta respuesta para la pregunta activa: la cola de timeout
+      // pasa el match a BETWEEN_QUESTIONS al vencer el timeLimit, así que esto
+      // también rechaza respuestas fuera de tiempo o a preguntas pasadas/futuras.
+      const activeQuestion = match.getActiveQuestion();
+      if (!activeQuestion || activeQuestion.id !== questionId) {
+        throw new BadRequestException('This question is not accepting answers');
+      }
+
+      if (match.hasAnswered(questionId, userId)) {
+        throw new BadRequestException('You already answered this question');
+      }
+
+      const answer = activeQuestion.options.find((op) => op.id == answerId);
+      if (!answer) {
+        throw new BadRequestException('Invalid answerId');
+      }
+
+      const correctAnswers = activeQuestion.options.filter((op) => op.isCorrect);
+      match.recordAnswer(questionId, userId, answer.id, answer.isCorrect);
+      match.addScore(userId, answer.isCorrect ? 100 : 0);
+      await this.saveMatch(match);
+
+      return {
+        isCorrect: answer.isCorrect,
+        correctAnswer: correctAnswers,
+        playersScores: match.getPlayersWithInfo(),
+      };
+    });
   }
 
   getMatchDto(match: Match): MatchDto {
@@ -189,6 +235,20 @@ export class MatchService {
       players: match.getPlayersWithInfo(),
       questions: match.getQuestions().map((q) => this.toQuestionDto(q)),
     };
+  }
+
+  private async withRoomLock<T>(roomId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.roomLocks.get(roomId) ?? Promise.resolve();
+    const run = previous.then(fn);
+    // La cola sigue aunque esta operación falle.
+    const tail = run.catch(() => undefined);
+    this.roomLocks.set(roomId, tail);
+
+    try {
+      return await run;
+    } finally {
+      if (this.roomLocks.get(roomId) === tail) this.roomLocks.delete(roomId);
+    }
   }
 
   private async saveMatch(match: Match): Promise<void> {
