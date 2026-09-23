@@ -3,7 +3,8 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MatchService } from './match/match.service';
 import { GAME_SCHEDULE_EVENT } from './queue/queue.service';
 import { GameJob } from './queue/type';
-import { ANSWER_GRACE_MS, QUESTION_LEAD_MS, START_COUNTDOWN_MS } from './game-timing';
+import { ANSWER_GRACE_MS, QUESTION_LEAD_MS } from './game-timing';
+import { CloseResult } from './match/match.service';
 
 /**
  * Game loop con línea de tiempo absoluta (server-authoritative):
@@ -29,12 +30,15 @@ export class GameService {
 
   /** Arranca la partida. Devuelve cuándo se mostrará la primera pregunta (hora del servidor). */
   async start(roomId: string, userId: string): Promise<{ firstQuestionAt: number }> {
-    const { seq } = await this.matchService.startMatch(roomId, userId);
-    const publishAt = Date.now() + START_COUNTDOWN_MS;
+    const { seq, publishAt, firstQuestionAt } = await this.matchService.startMatch(
+      roomId,
+      userId,
+      Date.now(),
+    );
 
     await this.schedule({ roomId, seq, kind: 'publish-question', dueAt: publishAt });
 
-    return { firstQuestionAt: publishAt + QUESTION_LEAD_MS };
+    return { firstQuestionAt };
   }
 
   async publishQuestion(roomId: string, seq: number, plannedAt: number) {
@@ -66,8 +70,23 @@ export class GameService {
 
   async closeQuestion(roomId: string, seq: number) {
     const result = await this.matchService.closeQuestion(roomId, seq, Date.now());
+    await this.afterClose(roomId, seq, result);
+  }
 
-    if (result.kind === 'stale') return;
+  /**
+   * Cierre anticipado: todos los jugadores conectados ya respondieron, no tiene
+   * sentido esperar al timeLimit. MatchService lo re-verifica bajo el lock, y
+   * el job de cierre programado queda obsoleto (seq) y se descarta solo.
+   */
+  async closeQuestionIfAllAnswered(roomId: string, seq: number) {
+    const result = await this.matchService.closeQuestion(roomId, seq, Date.now(), {
+      whenAllAnswered: true,
+    });
+    await this.afterClose(roomId, seq, result);
+  }
+
+  private async afterClose(roomId: string, seq: number, result: CloseResult) {
+    if (result.kind === 'stale' || result.kind === 'pending') return;
     if (result.kind === 'early') {
       await this.schedule({ roomId, seq, kind: 'close-question', dueAt: result.dueAt });
       return;

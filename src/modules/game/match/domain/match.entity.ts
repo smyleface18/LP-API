@@ -27,6 +27,12 @@ export class Match {
   private resultsPersisted = false;
   // userIds que pidieron revancha tras terminar la partida.
   private rematchVotes = new Set<string>();
+  // Jugadores que salieron de la sala a propósito (leaveRoom). Distinto de
+  // "desconectado" (isConnected=false): ese puede volver solo al reconectarse.
+  private leftPlayers = new Set<string>();
+  // Cuándo se mostrará la próxima pregunta (hora del servidor), para que un
+  // jugador que se reconecta entre preguntas vea la cuenta regresiva.
+  private nextQuestionAt: number | null = null;
 
   constructor(
     roomId: string,
@@ -63,7 +69,11 @@ export class Match {
     totalScore: number = 0,
     avatar?: string,
   ) {
-    if (this.players.has(userId)) return;
+    if (this.players.has(userId)) {
+      // Volver a unirse tras haber salido (o tras desconectarse) lo reincorpora.
+      this.reconnectPlayer(userId);
+      return;
+    }
 
     this.players.set(userId, {
       userId: userId,
@@ -88,7 +98,38 @@ export class Match {
     const player = this.players.get(userId);
     if (player) {
       player.isConnected = true;
+      this.leftPlayers.delete(userId);
     }
+  }
+
+  /** Salida explícita de la sala: no vuelve a menos que se una de nuevo. */
+  leave(userId: string) {
+    this.disconnectPlayer(userId);
+    if (this.players.has(userId)) this.leftPlayers.add(userId);
+  }
+
+  /**
+   * Si todos los jugadores conectados ya respondieron la pregunta activa (y hay
+   * al menos uno): se puede cerrar antes sin esperar al timeLimit.
+   */
+  haveAllConnectedAnswered(): boolean {
+    const question = this.getActiveQuestion();
+    if (!question) return false;
+
+    const connected = Array.from(this.players.values()).filter((p) => p.isConnected);
+    return connected.length > 0 && connected.every((p) => this.hasAnswered(question.id, p.userId));
+  }
+
+  getAnswerOf(questionId: string, userId: string): RecordedAnswer | null {
+    return this.answers.find((a) => a.questionId === questionId && a.userId === userId) ?? null;
+  }
+
+  getNextQuestionAt(): number | null {
+    return this.nextQuestionAt;
+  }
+
+  setNextQuestionAt(at: number | null) {
+    this.nextQuestionAt = at;
   }
 
   isUserConnected(userId: string): boolean {
@@ -119,6 +160,7 @@ export class Match {
     this.setStatus(MatchStatus.QUESTION_ACTIVE);
     this.questionStartsAt = startsAt;
     this.questionEndsAt = endsAt;
+    this.nextQuestionAt = null;
     this.seq++;
 
     return question;
@@ -158,20 +200,28 @@ export class Match {
     return this.answers.some((a) => a.questionId === questionId && a.userId === userId);
   }
 
+  /** Ms desde que se mostró la pregunta activa hasta `now`, acotado a su duración. */
+  getResponseTimeMs(now: number): number {
+    const window = this.getQuestionWindow();
+    if (!window) return 0;
+    return Math.min(Math.max(now - window.startsAt, 0), window.endsAt - window.startsAt);
+  }
+
   recordAnswer(
     questionId: string,
     userId: string,
     optionId: string,
     isCorrect: boolean,
     now: number,
+    points: number,
   ) {
-    const elapsedMs = this.questionStartsAt !== null ? now - this.questionStartsAt : 0;
     this.answers.push({
       questionId,
       userId,
       optionId,
       isCorrect,
-      timeTaken: Math.max(0, Math.round(elapsedMs / 1000)),
+      timeTaken: Math.round(this.getResponseTimeMs(now) / 1000),
+      points,
     });
   }
 
@@ -266,6 +316,7 @@ export class Match {
 
   finish() {
     this.setStatus(MatchStatus.FINISHED);
+    this.nextQuestionAt = null;
     this.seq++;
   }
 
@@ -275,11 +326,13 @@ export class Match {
     this.answers = [];
     this.questionStartsAt = null;
     this.questionEndsAt = null;
+    this.nextQuestionAt = null;
     this.resultsPersisted = false;
     this.rematchVotes.clear();
+    // Quien salió de la sala no vuelve con la revancha.
     this.players.forEach((player) => {
       player.matchScore = 0;
-      player.isConnected = true;
+      player.isConnected = !this.leftPlayers.has(player.userId);
     });
   }
 
@@ -318,13 +371,17 @@ export class Match {
       seq: this.seq,
       resultsPersisted: this.resultsPersisted,
       rematchVotes: Array.from(this.rematchVotes),
+      leftPlayers: Array.from(this.leftPlayers),
+      nextQuestionAt: this.nextQuestionAt,
     };
   }
 
+  /**
+   * Todos salieron de la sala a propósito. Una desconexión (app en segundo
+   * plano, corte de red) no cuenta: el jugador puede reconectarse y seguir.
+   */
   isRoomEmpty(): boolean {
-    const hasConnected = Array.from(this.players.values()).some((player) => player.isConnected);
-
-    return !hasConnected;
+    return Array.from(this.players.keys()).every((userId) => this.leftPlayers.has(userId));
   }
 
   setStatus(status: MatchStatus) {
@@ -429,6 +486,12 @@ export class Match {
     match.resultsPersisted = snapshot.resultsPersisted === true;
     if (Array.isArray(snapshot.rematchVotes)) {
       match.rematchVotes = new Set(snapshot.rematchVotes as string[]);
+    }
+    if (Array.isArray(snapshot.leftPlayers)) {
+      match.leftPlayers = new Set(snapshot.leftPlayers as string[]);
+    }
+    if (typeof snapshot.nextQuestionAt === 'number') {
+      match.nextQuestionAt = snapshot.nextQuestionAt;
     }
 
     return match;

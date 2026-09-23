@@ -1,4 +1,11 @@
-import { MatchDto, MatchStatus, ModeMatch, OptionDto, QuestionDto } from './domain/match.interface';
+import {
+  GameStateSnapshot,
+  MatchDto,
+  MatchStatus,
+  ModeMatch,
+  OptionDto,
+  QuestionDto,
+} from './domain/match.interface';
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Match } from './domain/match.entity';
 import { Level } from '@/db/enum/question.enum';
@@ -11,7 +18,14 @@ import { Question, QuestionOption, User } from '@/db/entities';
 import { AnswerProcessResultDto } from '../types';
 import { MatchResultsService } from './match-results.service';
 import { MatchStore } from './match.store';
-import { ANSWER_GRACE_MS, MIN_QUESTION_LEAD_MS, QUESTION_LEAD_MS, REVEAL_MS } from '../game-timing';
+import {
+  ANSWER_GRACE_MS,
+  MIN_QUESTION_LEAD_MS,
+  QUESTION_LEAD_MS,
+  REVEAL_MS,
+  START_COUNTDOWN_MS,
+} from '../game-timing';
+import { calculatePoints } from '../game-scoring';
 
 // Reintentos si el nombre de sala generado ya está en uso por otra partida.
 const MAX_ROOM_ID_ATTEMPTS = 5;
@@ -31,9 +45,34 @@ export type PublishResult =
 
 export type CloseResult =
   | { kind: 'stale' }
+  /** Cierre anticipado pedido pero todavía falta que respondan jugadores conectados. */
+  | { kind: 'pending' }
   /** El job se disparó antes de tiempo (skew de reloj entre instancias): reprogramar. */
   | { kind: 'early'; seq: number; dueAt: number }
   | { kind: 'closed'; seq: number; questionId: string; hasNext: boolean; nextPlannedAt: number };
+
+export interface AnswerOutcome extends AnswerProcessResultDto {
+  points: number;
+  /** Todos los conectados respondieron: se puede cerrar la pregunta ya. */
+  allAnswered: boolean;
+  /** Fase de la pregunta respondida, para pedir su cierre anticipado. */
+  seq: number;
+}
+
+export interface DisconnectOutcome {
+  match: Match;
+  /** Si hay una pregunta activa y los que quedan conectados ya respondieron todos. */
+  allAnswered: boolean;
+  seq: number;
+}
+
+export interface StartPlan {
+  seq: number;
+  /** Cuándo publicar la primera pregunta. */
+  publishAt: number;
+  /** Cuándo se mostrará (publishAt + antelación). */
+  firstQuestionAt: number;
+}
 
 export interface RematchVote {
   accepted: number;
@@ -63,7 +102,10 @@ export class MatchService {
       const match = new Match(roomId, difficulty, mode, questions, owner);
 
       // create() no pisa una partida existente con el mismo nombre de sala.
-      if (await this.store.create(match)) return match;
+      if (await this.store.create(match)) {
+        await this.store.setUserRoom(owner.id, roomId);
+        return match;
+      }
     }
 
     throw new BadRequestException('Could not allocate a room, try again');
@@ -82,20 +124,63 @@ export class MatchService {
 
       match.addPlayer(userId, username, level, totalScore, avatar);
       await this.store.save(match, lock);
+      await this.store.setUserRoom(userId, roomId);
 
       return match;
     });
   }
 
-  async disconnectUser(userId: string, roomId: string): Promise<Match> {
+  /** Corte de conexión (red, app en segundo plano): puede volver con resume(). */
+  async disconnectUser(userId: string, roomId: string): Promise<DisconnectOutcome> {
     return this.store.withRoomLock(roomId, async (lock) => {
       const match = await this.getMatch(roomId);
 
       match.disconnectPlayer(userId);
       await this.store.save(match, lock);
 
-      return match;
+      return { match, allAnswered: match.haveAllConnectedAnswered(), seq: match.getSeq() };
     });
+  }
+
+  /** Salida explícita de la sala (leaveRoom). */
+  async leaveMatch(userId: string, roomId: string): Promise<DisconnectOutcome> {
+    return this.store.withRoomLock(roomId, async (lock) => {
+      const match = await this.getMatch(roomId);
+
+      match.leave(userId);
+      await this.store.save(match, lock);
+      await this.store.clearUserRoom(userId, roomId);
+
+      return { match, allAnswered: match.haveAllConnectedAnswered(), seq: match.getSeq() };
+    });
+  }
+
+  /**
+   * Reincorpora a un usuario que se reconecta a la sala en la que estaba (si
+   * sigue existiendo y es jugador) y devuelve el estado completo para que su
+   * cliente reconstruya la pantalla. null si no tiene partida a la que volver.
+   */
+  async resume(userId: string): Promise<GameStateSnapshot | null> {
+    const roomId = await this.store.getUserRoom(userId);
+    if (!roomId) return null;
+
+    try {
+      return await this.store.withRoomLock(roomId, async (lock) => {
+        const match = await this.getMatch(roomId);
+        if (!match.hasPlayer(userId)) return null;
+
+        match.reconnectPlayer(userId);
+        await this.store.save(match, lock);
+
+        return this.toSnapshot(match, userId);
+      });
+    } catch (error) {
+      if (error instanceof MatchNotFoundError) {
+        await this.store.clearUserRoom(userId, roomId);
+        return null;
+      }
+      throw error;
+    }
   }
 
   async finishMatch(roomId: string) {
@@ -171,8 +256,18 @@ export class MatchService {
     });
   }
 
-  /** Cierra la pregunta activa cuando vence su ventana (endsAt + gracia). */
-  async closeQuestion(roomId: string, seq: number, now: number): Promise<CloseResult> {
+  /**
+   * Cierra la pregunta activa. Por defecto, cuando vence su ventana (endsAt +
+   * gracia). Con `whenAllAnswered` la cierra ya si todos los jugadores
+   * conectados respondieron; la condición se verifica acá, bajo el lock, así
+   * que no importa cuántas respuestas concurrentes lo pidan.
+   */
+  async closeQuestion(
+    roomId: string,
+    seq: number,
+    now: number,
+    { whenAllAnswered = false }: { whenAllAnswered?: boolean } = {},
+  ): Promise<CloseResult> {
     return this.store.withRoomLock(roomId, async (lock) => {
       const match = await this.getMatch(roomId);
       const window = match.getQuestionWindow();
@@ -181,34 +276,43 @@ export class MatchService {
         return { kind: 'stale' };
       }
 
-      const closeAt = window.endsAt + ANSWER_GRACE_MS;
-      if (now < closeAt) {
+      let closeAt = window.endsAt + ANSWER_GRACE_MS;
+      if (whenAllAnswered) {
+        if (!match.haveAllConnectedAnswered()) return { kind: 'pending' };
+        closeAt = Math.min(closeAt, now);
+      } else if (now < closeAt) {
         return { kind: 'early', seq, dueAt: closeAt };
       }
 
       match.finishCurrentQuestion();
+      const hasNext = match.hasNextQuestion();
+      // Anclado al cierre planeado (o al anticipado), no a cuándo corrió el job.
+      const nextPlannedAt = closeAt + REVEAL_MS;
+      match.setNextQuestionAt(hasNext ? nextPlannedAt + QUESTION_LEAD_MS : null);
       await this.store.save(match, lock);
 
       return {
         kind: 'closed',
         seq: match.getSeq(),
         questionId: question.id,
-        hasNext: match.hasNextQuestion(),
-        // Anclado al cierre planeado, no a `now`: sin deriva acumulada.
-        nextPlannedAt: closeAt + REVEAL_MS,
+        hasNext,
+        nextPlannedAt,
       };
     });
   }
 
-  async startMatch(roomId: string, userId: string): Promise<{ seq: number }> {
-    return this.store.withRoomLock(roomId, (lock) => this.startMatchLocked(roomId, userId, lock));
+  async startMatch(roomId: string, userId: string, now: number = Date.now()): Promise<StartPlan> {
+    return this.store.withRoomLock(roomId, (lock) =>
+      this.startMatchLocked(roomId, userId, now, lock),
+    );
   }
 
   private async startMatchLocked(
     roomId: string,
     userId: string,
+    now: number,
     lock: LockHandle,
-  ): Promise<{ seq: number }> {
+  ): Promise<StartPlan> {
     const match = await this.getMatch(roomId);
 
     if (match.getOwner().id != userId) {
@@ -222,10 +326,13 @@ export class MatchService {
     }
 
     match.start();
+    const publishAt = now + START_COUNTDOWN_MS;
+    const firstQuestionAt = publishAt + QUESTION_LEAD_MS;
+    match.setNextQuestionAt(firstQuestionAt);
 
     await this.store.save(match, lock);
 
-    return { seq: match.getSeq() };
+    return { seq: match.getSeq(), publishAt, firstQuestionAt };
   }
 
   /**
@@ -264,7 +371,7 @@ export class MatchService {
     answerId: string,
     userId: string,
     receivedAt: number = Date.now(),
-  ): Promise<AnswerProcessResultDto> {
+  ): Promise<AnswerOutcome> {
     return this.store.withRoomLock(roomId, async (lock) => {
       const match = await this.getMatch(roomId);
 
@@ -294,14 +401,23 @@ export class MatchService {
       }
 
       const correctAnswers = activeQuestion.options.filter((op) => op.isCorrect);
-      match.recordAnswer(questionId, userId, answer.id, answer.isCorrect, receivedAt);
-      match.addScore(userId, answer.isCorrect ? 100 : 0);
+      const window = match.getQuestionWindow()!;
+      const points = calculatePoints(
+        answer.isCorrect,
+        match.getResponseTimeMs(receivedAt),
+        window.endsAt - window.startsAt,
+      );
+      match.recordAnswer(questionId, userId, answer.id, answer.isCorrect, receivedAt, points);
+      match.addScore(userId, points);
       await this.store.save(match, lock);
 
       return {
         isCorrect: answer.isCorrect,
         correctAnswer: correctAnswers,
         playersScores: match.getPlayersWithInfo(),
+        points,
+        allAnswered: match.haveAllConnectedAnswered(),
+        seq: match.getSeq(),
       };
     });
   }
@@ -315,6 +431,28 @@ export class MatchService {
       currentQuestionIndex: match.getcurrentQuestionIndex(),
       players: match.getPlayersWithInfo(),
       questions: match.getQuestions().map((q) => this.toQuestionDto(q)),
+    };
+  }
+
+  private toSnapshot(match: Match, userId: string): GameStateSnapshot {
+    const question = match.getActiveQuestion();
+    const window = question ? match.getQuestionWindow() : null;
+
+    return {
+      roomId: match.getRoomId(),
+      level: match.getDifficulty(),
+      modeMatch: match.getMode(),
+      status: match.getStatus(),
+      players: match.getPlayersWithInfo(),
+      questionNumber: match.getcurrentQuestionIndex(),
+      totalQuestions: match.getQuestions().length,
+      question: question ? this.toQuestionDto(question) : null,
+      startsAt: window?.startsAt ?? null,
+      endsAt: window?.endsAt ?? null,
+      answeredOptionId: question
+        ? (match.getAnswerOf(question.id, userId)?.optionId ?? null)
+        : null,
+      nextQuestionAt: match.getNextQuestionAt(),
     };
   }
 

@@ -17,8 +17,9 @@ export interface RecordedAnswer {
   userId: string;
   optionId: string;
   isCorrect: boolean;
-  /** Segundos desde que se envió la pregunta. */
+  /** Segundos desde que se mostró la pregunta (startsAt). */
   timeTaken: number;
+  points: number;
 }
 
 export enum ModeMatch {
@@ -36,12 +37,26 @@ export enum MatchStatus {
   PREPARING = 'PREPARING',
 }
 
-export interface MatchSnapshot {
+/**
+ * Estado completo de la partida para un jugador que se (re)conecta: con esto
+ * el cliente reconstruye la pantalla sin haber recibido los eventos previos.
+ * Los instantes están en hora del servidor (epoch ms).
+ */
+export interface GameStateSnapshot {
   roomId: string;
-  difficulty: Level;
+  level: Level;
+  modeMatch: ModeMatch;
   status: MatchStatus;
-  currentQuestionIndex: number;
-  players: [string, PlayerInfo][];
+  players: PlayerInfo[];
+  questionNumber: number;
+  totalQuestions: number;
+  /** Solo si hay una pregunta activa. */
+  question: QuestionDto | null;
+  startsAt: number | null;
+  endsAt: number | null;
+  /** Opción que este jugador ya eligió en la pregunta activa, si respondió. */
+  answeredOptionId: string | null;
+  nextQuestionAt: number | null;
 }
 
 export interface OptionDto {

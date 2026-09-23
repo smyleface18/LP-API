@@ -42,6 +42,32 @@ export class MatchStore {
     return `match:{${roomId}}:lock`;
   }
 
+  static userRoomKey(userId: string): string {
+    return `user:{${userId}}:room`;
+  }
+
+  /**
+   * Sala activa de cada usuario, para reincorporarlo al reconectarse. Vive en
+   * Redis (no en el socket) porque la reconexión puede caer en otra instancia.
+   */
+  async setUserRoom(userId: string, roomId: string): Promise<void> {
+    await this.redis.set(MatchStore.userRoomKey(userId), roomId, {
+      expiration: { type: 'PX', value: this.ttlMs },
+    });
+  }
+
+  async getUserRoom(userId: string): Promise<string | null> {
+    return this.redis.get(MatchStore.userRoomKey(userId));
+  }
+
+  /** Borra la sala del usuario solo si sigue siendo `roomId` (pudo unirse a otra). */
+  async clearUserRoom(userId: string, roomId: string): Promise<void> {
+    await this.redis.eval(
+      `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0`,
+      { keys: [MatchStore.userRoomKey(userId)], arguments: [roomId] },
+    );
+  }
+
   async get(roomId: string): Promise<unknown> {
     const raw = await this.redis.get(MatchStore.matchKey(roomId));
     return raw ? (JSON.parse(raw) as unknown) : null;

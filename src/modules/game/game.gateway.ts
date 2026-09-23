@@ -20,6 +20,7 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { WsAuthService } from '@/common/src/ws-auth/ws-auth.service';
 import { GameService } from './game.service';
 import { MediaService } from '../media/media.service';
+import { MatchNotFoundError } from './match/domain/exceptions/match-not-found.error';
 
 @WebSocketGateway({
   namespace: '/game',
@@ -70,7 +71,14 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       client.emit('error', { message: 'Unauthorized' });
       client.disconnect();
+      return {
+        ok: false,
+        data: null,
+        message: 'unauthorized',
+      };
     }
+
+    await this.resumeGame(client);
 
     return {
       ok: true,
@@ -79,7 +87,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     };
   }
 
-  handleDisconnect(@ConnectedSocket() client: ConnectionGameSocket): ApiResponse<null> {
+  async handleDisconnect(
+    @ConnectedSocket() client: ConnectionGameSocket,
+  ): Promise<ApiResponse<null>> {
     const userId = client.data.userId;
     const roomId = client.data.roomId;
 
@@ -92,11 +102,48 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
 
     this.logger.debug(`user disconnected: ${userId}`);
+
+    // Se marca desconectado (no "se fue"): al reconectarse vuelve con resumeGame.
+    try {
+      const outcome = await this.matchService.disconnectUser(userId, roomId);
+      this.server.to(roomId).emit('playersUpdated', {
+        players: outcome.match.getPlayersWithInfo(),
+      });
+      // Si los que quedan ya respondieron todos, no hace falta esperar al que se fue.
+      if (outcome.allAnswered) {
+        await this.gameService.closeQuestionIfAllAnswered(roomId, outcome.seq);
+      }
+    } catch (error) {
+      if (!(error instanceof MatchNotFoundError)) {
+        this.logger.warn(`disconnect handling failed: ${(error as Error).message}`);
+      }
+    }
+
     return {
       ok: true,
       data: null,
       message: 'user desconeted of game',
     };
+  }
+
+  /**
+   * Reconexión: si el usuario tenía una partida en curso (en cualquier
+   * instancia), vuelve a la sala y recibe el estado completo (`gameState`)
+   * para reconstruir la pantalla, incluida la pregunta activa con su ventana.
+   */
+  private async resumeGame(client: ConnectionGameSocket) {
+    try {
+      const snapshot = await this.matchService.resume(client.data.userId);
+      if (!snapshot) return;
+
+      await client.join(snapshot.roomId);
+      client.data.roomId = snapshot.roomId;
+      client.emit('gameState', snapshot);
+      this.server.to(snapshot.roomId).emit('playersUpdated', { players: snapshot.players });
+      this.logger.debug(`user ${client.data.userId} resumed room ${snapshot.roomId}`);
+    } catch (error) {
+      this.logger.warn(`resume failed for ${client.data.userId}: ${(error as Error).message}`);
+    }
   }
 
   @SubscribeMessage('createGame')
@@ -233,11 +280,17 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     client.emit('answerResult', {
       correct: result.isCorrect,
       correctAnswer: result.correctAnswer,
+      points: result.points,
     });
 
     this.server.to(roomId).emit('playersUpdated', {
       players: result.playersScores,
     });
+
+    // Después de avisar el resultado, para que llegue antes que questionEnded.
+    if (result.allAnswered) {
+      await this.gameService.closeQuestionIfAllAnswered(roomId, result.seq);
+    }
 
     return { received: true };
   }
@@ -296,14 +349,17 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       throw new BadRequestException('missing userId or roomId');
     }
 
-    await this.matchService.disconnectUser(userId, roomId);
+    const outcome = await this.matchService.leaveMatch(userId, roomId);
 
     await client.leave(roomId);
 
-    const match = await this.matchService.getMatch(roomId);
     this.server.to(roomId).emit('playersUpdated', {
-      players: match.getPlayersWithInfo(),
+      players: outcome.match.getPlayersWithInfo(),
     });
+
+    if (outcome.allAnswered) {
+      await this.gameService.closeQuestionIfAllAnswered(roomId, outcome.seq);
+    }
 
     this.logger.debug(`user ${userId} left room ${roomId}`);
     client.data.roomId = undefined;

@@ -2,7 +2,7 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { GameService } from './game.service';
 import { MatchService } from './match/match.service';
 import { GAME_SCHEDULE_EVENT } from './queue/queue.service';
-import { ANSWER_GRACE_MS, QUESTION_LEAD_MS, START_COUNTDOWN_MS } from './game-timing';
+import { ANSWER_GRACE_MS, QUESTION_LEAD_MS } from './game-timing';
 
 const ROOM = 'room-1';
 
@@ -36,15 +36,41 @@ describe('GameService (game loop orchestration)', () => {
 
   afterEach(() => jest.restoreAllMocks());
 
-  it('start schedules the first publish after the countdown', async () => {
-    match.startMatch.mockResolvedValue({ seq: 1 });
+  it('start schedules the first publish planned by the match', async () => {
+    match.startMatch.mockResolvedValue({ seq: 1, publishAt: 4_000, firstQuestionAt: 5_500 });
 
     const { firstQuestionAt } = await service.start(ROOM, 'u1');
 
-    expect(scheduled()).toEqual([
-      { roomId: ROOM, seq: 1, kind: 'publish-question', dueAt: 1_000 + START_COUNTDOWN_MS },
+    expect(match.startMatch).toHaveBeenCalledWith(ROOM, 'u1', 1_000);
+    expect(scheduled()).toEqual([{ roomId: ROOM, seq: 1, kind: 'publish-question', dueAt: 4_000 }]);
+    expect(firstQuestionAt).toBe(5_500);
+  });
+
+  it('early close does nothing while players are still answering', async () => {
+    match.closeQuestion.mockResolvedValue({ kind: 'pending' });
+
+    await service.closeQuestionIfAllAnswered(ROOM, 2);
+
+    expect(match.closeQuestion).toHaveBeenCalledWith(ROOM, 2, 1_000, { whenAllAnswered: true });
+    expect(events.emit).not.toHaveBeenCalled();
+    expect(scheduled()).toEqual([]);
+  });
+
+  it('early close ends the question and schedules the next one', async () => {
+    match.closeQuestion.mockResolvedValue({
+      kind: 'closed',
+      seq: 3,
+      questionId: 'q1',
+      hasNext: true,
+      nextPlannedAt: 4_000,
+    });
+
+    await service.closeQuestionIfAllAnswered(ROOM, 2);
+
+    expect(emitted('game.question-ended')).toEqual([
+      { roomId: ROOM, questionId: 'q1', nextQuestionAt: 4_000 + QUESTION_LEAD_MS },
     ]);
-    expect(firstQuestionAt).toBe(1_000 + START_COUNTDOWN_MS + QUESTION_LEAD_MS);
+    expect(scheduled()).toEqual([{ roomId: ROOM, seq: 3, kind: 'publish-question', dueAt: 4_000 }]);
   });
 
   it('publish broadcasts the question window and schedules its close', async () => {

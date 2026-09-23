@@ -99,6 +99,19 @@ describeWithRedis('RedisLockService + MatchStore (real Redis)', () => {
     const newMatch = (roomId: string) =>
       new Match(roomId, Level.A1, ModeMatch.MULTIPLAYER, [], owner);
 
+    it('clearUserRoom() only forgets the room if it is still the same one', async () => {
+      const store = new MatchStore(clientA, lockA, envs);
+      const userId = `${prefix}-user`;
+
+      await store.setUserRoom(userId, 'room-a');
+      await store.setUserRoom(userId, 'room-b'); // se unió a otra sala
+      await store.clearUserRoom(userId, 'room-a'); // salida tardía de la anterior
+      expect(await store.getUserRoom(userId)).toBe('room-b');
+
+      await store.clearUserRoom(userId, 'room-b');
+      expect(await store.getUserRoom(userId)).toBeNull();
+    });
+
     it('create() does not overwrite an existing room', async () => {
       const store = new MatchStore(clientA, lockA, envs);
       const roomId = `${prefix}-room-create`;
