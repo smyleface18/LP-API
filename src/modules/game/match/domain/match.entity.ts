@@ -18,6 +18,8 @@ export class Match {
   private questionStartedAt: number | null = null;
   // Evita guardar dos veces el resultado si finishMatch se dispara más de una vez.
   private resultsPersisted = false;
+  // userIds que pidieron revancha tras terminar la partida.
+  private rematchVotes = new Set<string>();
 
   constructor(
     roomId: string,
@@ -141,6 +143,14 @@ export class Match {
     return this.answers;
   }
 
+  addRematchVote(userId: string) {
+    this.rematchVotes.add(userId);
+  }
+
+  getRematchVotes(): number {
+    return this.rematchVotes.size;
+  }
+
   areResultsPersisted(): boolean {
     return this.resultsPersisted;
   }
@@ -222,6 +232,7 @@ export class Match {
     this.answers = [];
     this.questionStartedAt = null;
     this.resultsPersisted = false;
+    this.rematchVotes.clear();
     this.players.forEach((player) => {
       player.matchScore = 0;
       player.isConnected = true;
@@ -260,6 +271,7 @@ export class Match {
       answers: this.answers,
       questionStartedAt: this.questionStartedAt,
       resultsPersisted: this.resultsPersisted,
+      rematchVotes: Array.from(this.rematchVotes),
     };
   }
 
@@ -363,6 +375,9 @@ export class Match {
       match.questionStartedAt = snapshot.questionStartedAt;
     }
     match.resultsPersisted = snapshot.resultsPersisted === true;
+    if (Array.isArray(snapshot.rematchVotes)) {
+      match.rematchVotes = new Set(snapshot.rematchVotes as string[]);
+    }
 
     return match;
   }

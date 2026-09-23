@@ -1,29 +1,36 @@
 import { MatchDto, MatchStatus, ModeMatch, OptionDto, QuestionDto } from './domain/match.interface';
 import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { Match } from './domain/match.entity';
-import { CacheService } from '@/common/src/cache/cache.service';
 import { Level } from '@/db/enum/question.enum';
 import { QuestionService } from '@/modules/question/question.service';
-import { CacheKeys } from '@/common/src/cache/cache-key';
 import { MatchNotFoundError } from './domain/exceptions/match-not-found.error';
 import { UniqueNamesAdapter } from '@/common/src/unique-names/unique-names.adapter';
 import { v4 } from 'uuid';
+import { LockHandle } from '@/common/src/redis/redis-lock.service';
 import { Question, QuestionOption, User } from '@/db/entities';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AnswerProcessResultDto } from '../types';
 import { MatchResultsService } from './match-results.service';
+import { MatchStore } from './match.store';
+
+// Reintentos si el nombre de sala generado ya está en uso por otra partida.
+const MAX_ROOM_ID_ATTEMPTS = 5;
+
+export interface RematchVote {
+  accepted: number;
+  total: number;
+  /** Presente solo cuando votaron todos y el match se reinició. */
+  rematch?: Match;
+}
 
 @Injectable()
 export class MatchService {
-  // Cola de operaciones por sala: cada mutación hace get -> modificar -> set sobre
-  // la cache, así que dos operaciones concurrentes en la misma sala (ej. dos
-  // jugadores respondiendo a la vez) se pisarían y una se perdería. Solo
-  // serializa dentro de este proceso; con varias instancias haría falta un
-  // lock distribuido en Redis.
-  private readonly roomLocks = new Map<string, Promise<unknown>>();
-
+  // Cada mutación hace get -> modificar -> save sobre Redis. Para que dos
+  // operaciones concurrentes en la misma sala (ej. dos jugadores respondiendo a
+  // la vez, aunque estén conectados a instancias distintas de la API) no se
+  // pisen, todas pasan por store.withRoomLock: un lock distribuido en Redis.
   constructor(
-    private readonly cache: CacheService,
+    private readonly store: MatchStore,
     private readonly questionService: QuestionService,
     private readonly uniqueNames: UniqueNamesAdapter,
     private readonly eventEmitter: EventEmitter2,
@@ -33,22 +40,15 @@ export class MatchService {
   async createMatch(difficulty: Level, mode: ModeMatch, owner: User): Promise<Match> {
     const questions = await this.questionService.getRandomQuestions(difficulty);
 
-    let roomId = '';
-    switch (mode) {
-      case ModeMatch.MULTIPLAYER:
-        roomId = this.uniqueNames.NamesGenerator();
-        break;
-      case ModeMatch.SINGLEPLAYER:
-        roomId = v4();
-        break;
-      default:
-        roomId = v4();
+    for (let attempt = 0; attempt < MAX_ROOM_ID_ATTEMPTS; attempt++) {
+      const roomId = mode === ModeMatch.MULTIPLAYER ? this.uniqueNames.NamesGenerator() : v4();
+      const match = new Match(roomId, difficulty, mode, questions, owner);
+
+      // create() no pisa una partida existente con el mismo nombre de sala.
+      if (await this.store.create(match)) return match;
     }
 
-    const match = new Match(roomId, difficulty, mode, questions, owner);
-
-    await this.saveMatch(match);
-    return match;
+    throw new BadRequestException('Could not allocate a room, try again');
   }
 
   async joinMatch(
@@ -59,36 +59,36 @@ export class MatchService {
     totalScore: number = 0,
     avatar?: string,
   ): Promise<Match> {
-    return this.withRoomLock(roomId, async () => {
+    return this.store.withRoomLock(roomId, async (lock) => {
       const match = await this.getMatch(roomId);
 
       match.addPlayer(userId, username, level, totalScore, avatar);
-      await this.saveMatch(match);
+      await this.store.save(match, lock);
 
       return match;
     });
   }
 
   async disconnectUser(userId: string, roomId: string): Promise<Match> {
-    return this.withRoomLock(roomId, async () => {
+    return this.store.withRoomLock(roomId, async (lock) => {
       const match = await this.getMatch(roomId);
 
       match.disconnectPlayer(userId);
-      await this.saveMatch(match);
+      await this.store.save(match, lock);
 
       return match;
     });
   }
 
   async finishMatch(roomId: string) {
-    return this.withRoomLock(roomId, async () => {
+    return this.store.withRoomLock(roomId, async (lock) => {
       const match = await this.getMatch(roomId);
 
       if (!match.areResultsPersisted()) {
         const totals = await this.matchResults.persist(match);
         match.applyTotalScores(totals);
         match.markResultsPersisted();
-        await this.saveMatch(match);
+        await this.store.save(match, lock);
       }
 
       return match.getResults();
@@ -96,7 +96,7 @@ export class MatchService {
   }
 
   async getMatch(roomId: string): Promise<Match> {
-    const match = await this.cache.get<Match>(CacheKeys.match(roomId));
+    const match = await this.store.get(roomId);
     if (!match) {
       throw new MatchNotFoundError(roomId);
     }
@@ -105,10 +105,10 @@ export class MatchService {
   }
 
   async nextQuestion(roomId: string): Promise<QuestionDto | null> {
-    return this.withRoomLock(roomId, () => this.nextQuestionUnlocked(roomId));
+    return this.store.withRoomLock(roomId, (lock) => this.nextQuestionLocked(roomId, lock));
   }
 
-  private async nextQuestionUnlocked(roomId: string): Promise<QuestionDto | null> {
+  private async nextQuestionLocked(roomId: string, lock: LockHandle): Promise<QuestionDto | null> {
     const match = await this.getMatch(roomId);
     const question = match.sendNextQuestion();
 
@@ -126,16 +126,20 @@ export class MatchService {
       });
     }
 
-    await this.saveMatch(match);
+    await this.store.save(match, lock);
 
     return question ? this.toQuestionDto(question) : null;
   }
 
   async startMatch(roomId: string, userId: string): Promise<MatchStatus> {
-    return this.withRoomLock(roomId, () => this.startMatchUnlocked(roomId, userId));
+    return this.store.withRoomLock(roomId, (lock) => this.startMatchLocked(roomId, userId, lock));
   }
 
-  private async startMatchUnlocked(roomId: string, userId: string): Promise<MatchStatus> {
+  private async startMatchLocked(
+    roomId: string,
+    userId: string,
+    lock: LockHandle,
+  ): Promise<MatchStatus> {
     const match = await this.getMatch(roomId);
 
     if (match.getOwner().id != userId) {
@@ -150,29 +154,46 @@ export class MatchService {
 
     match.start();
 
-    await this.saveMatch(match);
+    await this.store.save(match, lock);
 
     return match.getStatus();
   }
 
-  async resetForRematch(roomId: string): Promise<Match> {
-    return this.withRoomLock(roomId, async () => {
+  /**
+   * Registra el voto de revancha del jugador. Los votos viven en el estado del
+   * match (Redis), no en memoria del gateway, para que cuenten aunque cada
+   * jugador esté conectado a una instancia distinta.
+   */
+  async requestRematch(roomId: string, userId: string): Promise<RematchVote> {
+    return this.store.withRoomLock(roomId, async (lock) => {
       const match = await this.getMatch(roomId);
       if (match.getStatus() !== MatchStatus.FINISHED) {
         throw new BadRequestException('The game is not finished yet.');
       }
+      if (!match.hasPlayer(userId)) {
+        throw new BadRequestException('You are not a player in this match');
+      }
+
+      match.addRematchVote(userId);
+      const accepted = match.getRematchVotes();
+      const total = match.getPlayersCount();
+
+      if (accepted < total) {
+        await this.store.save(match, lock);
+        return { accepted, total };
+      }
 
       match.resetForRematch();
-      await this.saveMatch(match);
-      return match;
+      await this.store.save(match, lock);
+      return { accepted, total, rematch: match };
     });
   }
 
   async finishCurrentQuestion(roomId: string): Promise<Match> {
-    return this.withRoomLock(roomId, async () => {
+    return this.store.withRoomLock(roomId, async (lock) => {
       const match = await this.getMatch(roomId);
       match.finishCurrentQuestion();
-      await this.saveMatch(match);
+      await this.store.save(match, lock);
       return match;
     });
   }
@@ -188,7 +209,7 @@ export class MatchService {
     answerId: string,
     userId: string,
   ): Promise<AnswerProcessResultDto> {
-    return this.withRoomLock(roomId, async () => {
+    return this.store.withRoomLock(roomId, async (lock) => {
       const match = await this.getMatch(roomId);
 
       if (!match.hasPlayer(userId)) {
@@ -215,7 +236,7 @@ export class MatchService {
       const correctAnswers = activeQuestion.options.filter((op) => op.isCorrect);
       match.recordAnswer(questionId, userId, answer.id, answer.isCorrect);
       match.addScore(userId, answer.isCorrect ? 100 : 0);
-      await this.saveMatch(match);
+      await this.store.save(match, lock);
 
       return {
         isCorrect: answer.isCorrect,
@@ -235,24 +256,6 @@ export class MatchService {
       players: match.getPlayersWithInfo(),
       questions: match.getQuestions().map((q) => this.toQuestionDto(q)),
     };
-  }
-
-  private async withRoomLock<T>(roomId: string, fn: () => Promise<T>): Promise<T> {
-    const previous = this.roomLocks.get(roomId) ?? Promise.resolve();
-    const run = previous.then(fn);
-    // La cola sigue aunque esta operación falle.
-    const tail = run.catch(() => undefined);
-    this.roomLocks.set(roomId, tail);
-
-    try {
-      return await run;
-    } finally {
-      if (this.roomLocks.get(roomId) === tail) this.roomLocks.delete(roomId);
-    }
-  }
-
-  private async saveMatch(match: Match): Promise<void> {
-    return await this.cache.set(CacheKeys.match(match.getRoomId()), match.toPersistence(), 900000); // todo: implement definition of ttl by now is 15 minutes
   }
 
   private toQuestionDto(question: Question): QuestionDto {

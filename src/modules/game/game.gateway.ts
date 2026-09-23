@@ -33,7 +33,6 @@ import { MediaService } from '../media/media.service';
 export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server!: Server;
   private readonly logger = new Logger(GameGateway.name);
-  private readonly rematchRequests = new Map<string, Set<string>>();
 
   constructor(
     private readonly matchService: MatchService,
@@ -267,25 +266,12 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const userId = client.data.userId;
     if (!roomId || !userId) throw new BadRequestException('missing userId or roomId');
 
-    const match = await this.matchService.getMatch(roomId);
-    if (match.getStatus() !== MatchStatus.FINISHED) {
-      throw new BadRequestException('The game is not finished yet.');
-    }
+    const { accepted, total, rematch } = await this.matchService.requestRematch(roomId, userId);
 
     await client.join(roomId);
-    const requests = this.rematchRequests.get(roomId) ?? new Set<string>();
-    requests.add(userId);
-    this.rematchRequests.set(roomId, requests);
+    this.server.to(roomId).emit('rematchStatus', { accepted, total });
 
-    const players = match.getPlayersWithInfo();
-    this.server.to(roomId).emit('rematchStatus', {
-      accepted: requests.size,
-      total: players.length,
-    });
-
-    if (requests.size === players.length) {
-      const rematch = await this.matchService.resetForRematch(roomId);
-      this.rematchRequests.delete(roomId);
+    if (rematch) {
       this.server.to(roomId).emit('rematchReady', {
         roomId: rematch.getRoomId(),
         level: rematch.getDifficulty(),
