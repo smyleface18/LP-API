@@ -1,6 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { RedisIoAdapter } from './modules/game/redis-io.adapter';
 import { ResponseInterceptor } from './common/src/api/response.interceptor';
 import { HttpExceptionFilter } from './common/src/api/http-exception.filter';
@@ -8,17 +8,16 @@ import { HttpExceptionFilter } from './common/src/api/http-exception.filter';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // CORS para HTTP
-  app.enableCors({
-    origin: (origin, callback) => {
-      return callback(null, true);
-      if (!origin || /^https?:\/\/localhost(:\d+)?$/.test(origin)) {
-        callback(null, true);
-        return;
-      }
+  // CORS para HTTP. CORS_ORIGINS (separados por coma) restringe los orígenes
+  // permitidos; sin definir se aceptan todos, cómodo en desarrollo pero hay que
+  // configurarlo en producción. Apps nativas no mandan Origin y no les afecta.
+  const allowedOrigins = (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 
-      callback(new Error('Origin not allowed by CORS'), false);
-    },
+  app.enableCors({
+    origin: allowedOrigins.length > 0 ? allowedOrigins : true,
     credentials: true,
   });
 
@@ -42,18 +41,16 @@ async function bootstrap() {
 
   // Socket.IO Adapter
   const redisIoAdapter = new RedisIoAdapter(app);
-  await redisIoAdapter.connectToRedis();
+  redisIoAdapter.connectToRedis();
   app.useWebSocketAdapter(redisIoAdapter);
 
   // Escuchar en todas las interfaces (0.0.0.0) para red local
   const port = process.env.PORT ?? 3000;
   await app.listen(port, '0.0.0.0');
 
-  console.log('🚀 API corriendo en:');
-  console.log(`   - Local: http://localhost:${port}`);
-  console.log(`   - Red:   http://[TU_IP]:${port}`);
+  Logger.log(`API running on http://localhost:${port}`, 'Bootstrap');
 }
 
 bootstrap().catch((e) => {
-  console.error('❌ API falló:', e);
+  Logger.error('API failed to start', e instanceof Error ? e.stack : String(e), 'Bootstrap');
 });

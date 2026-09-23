@@ -7,7 +7,7 @@ import {
   OnGatewayConnection,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, Logger } from '@nestjs/common';
 import { Server } from 'socket.io';
 import { User } from '@/db/entities';
 import { Repository } from 'typeorm';
@@ -32,6 +32,7 @@ import { MediaService } from '../media/media.service';
 })
 export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server!: Server;
+  private readonly logger = new Logger(GameGateway.name);
   private readonly rematchRequests = new Map<string, Set<string>>();
 
   constructor(
@@ -47,7 +48,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: ConnectionGameSocket,
   ): Promise<ApiResponse<null>> {
     const token = client.handshake.auth?.token as string;
-    console.log('Token recibido en conexión:', token);
     if (!token) {
       client.emit('error', { message: 'Token missing' });
       client.disconnect();
@@ -64,17 +64,10 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.data.userId = payload.username;
       client.data.role = payload['cognito:groups'] || [];
 
-      console.log(
-        '[GameGateway] user connected - userId:',
-        client.data.userId,
-        '- username:',
-        payload.username,
-        '- rol',
-        payload['cognito:groups'],
-      );
+      this.logger.debug(`user connected: ${client.data.userId}`);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      console.error('Auth error:', errorMessage);
+      this.logger.warn(`socket auth failed: ${errorMessage}`);
 
       client.emit('error', { message: 'Unauthorized' });
       client.disconnect();
@@ -99,7 +92,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       };
     }
 
-    console.log(`user desconeted : ${userId}`);
+    this.logger.debug(`user disconnected: ${userId}`);
     return {
       ok: true,
       data: null,
@@ -137,19 +130,15 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       },
     );
 
-    console.log('roomId del match:', match.getRoomId());
-    console.log('rooms antes del join:', [...client.rooms]);
-
     await client.join(match.getRoomId());
 
-    console.log('rooms después del join:', [...client.rooms]);
     client.data.roomId = match.getRoomId();
 
     this.server.to(match.getRoomId()).emit('playersUpdated', {
       players: match.getPlayersWithInfo(),
     });
 
-    console.log(`Usuario ${user.id} se ha unido al juego`);
+    this.logger.debug(`user ${user.id} created room ${match.getRoomId()}`);
     return {
       ok: true,
       data: {
@@ -203,7 +192,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       players: updatedMatch.getPlayersWithInfo(),
     });
 
-    console.log(`Usuario ${user.id} se ha unido al juego`);
+    this.logger.debug(`user ${user.id} joined room ${joinGameDto.roomId}`);
 
     return {
       ok: true,
@@ -326,7 +315,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       players: match.getPlayersWithInfo(),
     });
 
-    console.log(`Usuario ${userId} ha abandonado la sala ${roomId}`);
+    this.logger.debug(`user ${userId} left room ${roomId}`);
     client.data.roomId = undefined;
 
     return { success: true };
@@ -340,8 +329,6 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     totalQuestions: number;
     timeLimit: number;
   }) {
-    console.log('pregunta enviada a:', payload.roomId);
-
     this.server.to(payload.roomId).emit('newQuestion', {
       question: payload.question,
       questionNumber: payload.questionNumber,

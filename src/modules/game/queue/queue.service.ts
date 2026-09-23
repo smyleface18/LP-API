@@ -1,5 +1,5 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { TimeoutDto } from '../types';
 import { OnEvent } from '@nestjs/event-emitter';
@@ -7,13 +7,14 @@ import { GameQueueEvent } from './type';
 
 @Injectable()
 export class GameTimeoutQueue {
+  private readonly logger = new Logger(GameTimeoutQueue.name);
   constructor(
     @InjectQueue('game-question-timeout')
     private readonly queue: Queue,
   ) {}
 
   async scheduleQuestionEnd(timeoutDto: TimeoutDto): Promise<void> {
-    console.log('add end-question timeout', timeoutDto);
+    this.logger.debug(`scheduling question end for room ${timeoutDto.roomId}`);
     await this.queue.add(
       `end-question-roomId-${timeoutDto.roomId}`,
       {
@@ -29,7 +30,7 @@ export class GameTimeoutQueue {
   }
 
   async scheduleQuestionStart(payload: { roomId: string; delay: number }): Promise<void> {
-    console.log('add start-question timeout', payload);
+    this.logger.debug(`scheduling question start for room ${payload.roomId}`);
     await this.queue.add(
       `start-question-roomId-${payload.roomId}`,
       {

@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { MatchService } from './match/match.service';
 
 @Injectable()
 export class GameService {
+  private readonly logger = new Logger(GameService.name);
   constructor(
     private readonly matchService: MatchService,
     private readonly eventEmitter: EventEmitter2,
@@ -51,7 +52,7 @@ export class GameService {
   }
 
   async finishMatch(roomId: string) {
-    console.log(`Finalizando partida en roomId: ${roomId}`);
+    this.logger.log(`finishing match ${roomId}`);
     const results = await this.matchService.finishMatch(roomId);
     this.eventEmitter.emit('game.finished', {
       roomId,
