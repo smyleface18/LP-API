@@ -18,6 +18,7 @@ import { Question, QuestionOption, User } from '@/db/entities';
 import { AnswerProcessResultDto } from '../types';
 import { MatchResultsService } from './match-results.service';
 import { MatchStore } from './match.store';
+import { MediaService } from '@/modules/media/media.service';
 import {
   ANSWER_GRACE_MS,
   MIN_QUESTION_LEAD_MS,
@@ -92,10 +93,14 @@ export class MatchService {
     private readonly questionService: QuestionService,
     private readonly uniqueNames: UniqueNamesAdapter,
     private readonly matchResults: MatchResultsService,
+    private readonly media: MediaService,
   ) {}
 
   async createMatch(difficulty: Level, mode: ModeMatch, owner: User): Promise<Match> {
     const questions = await this.questionService.getRandomQuestions(difficulty);
+    if (questions.length === 0) {
+      throw new BadRequestException('There are no questions available for this level yet');
+    }
 
     for (let attempt = 0; attempt < MAX_ROOM_ID_ATTEMPTS; attempt++) {
       const roomId = mode === ModeMatch.MULTIPLAYER ? this.uniqueNames.NamesGenerator() : v4();
@@ -172,7 +177,9 @@ export class MatchService {
         match.reconnectPlayer(userId);
         await this.store.save(match, lock);
 
-        return this.toSnapshot(match, userId);
+        const snapshot = this.toSnapshot(match, userId);
+        if (snapshot.question) snapshot.question = await this.signQuestionDto(snapshot.question);
+        return snapshot;
       });
     } catch (error) {
       if (error instanceof MatchNotFoundError) {
@@ -247,7 +254,7 @@ export class MatchService {
       return {
         kind: 'question',
         seq: match.getSeq(),
-        question: this.toQuestionDto(question),
+        question: await this.signQuestionDto(this.toQuestionDto(question)),
         questionNumber: match.getcurrentQuestionIndex(),
         totalQuestions: match.getQuestions().length,
         startsAt,
@@ -432,6 +439,23 @@ export class MatchService {
       players: match.getPlayersWithInfo(),
       questions: match.getQuestions().map((q) => this.toQuestionDto(q)),
     };
+  }
+
+  /**
+   * Firma la media al momento de enviar la pregunta: el bucket es privado y las
+   * URLs vencen, así que las guardadas en el match (o no firmadas) no sirven.
+   */
+  private async signQuestionDto(question: QuestionDto): Promise<QuestionDto> {
+    const [media, options] = await Promise.all([
+      this.media.signUrl(question.media),
+      Promise.all(
+        question.options.map(async (option) => ({
+          ...option,
+          media: await this.media.signUrl(option.media),
+        })),
+      ),
+    ]);
+    return { ...question, media, options };
   }
 
   private toSnapshot(match: Match, userId: string): GameStateSnapshot {

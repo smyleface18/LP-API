@@ -9,6 +9,7 @@ import { ModeMatch } from './domain/match.interface';
 import { MatchResultsService } from './match-results.service';
 import { MatchService } from './match.service';
 import { MatchStore } from './match.store';
+import { MediaService } from '@/modules/media/media.service';
 import { ANSWER_GRACE_MS, MIN_QUESTION_LEAD_MS, QUESTION_LEAD_MS, REVEAL_MS } from '../game-timing';
 import { calculatePoints, MAX_POINTS } from '../game-scoring';
 
@@ -28,11 +29,18 @@ const question = (id: string) =>
   ({
     id,
     timeLimit: 10,
+    media: { id: `${id}-media`, key: `image/${id}.png`, url: 'stale-url' },
     options: [
       { id: `${id}-ok`, isCorrect: true },
       { id: `${id}-bad`, isCorrect: false },
     ],
   }) as unknown as Question;
+
+// Firma "fresca" determinística: permite verificar que se firma al enviar.
+const media = {
+  signUrl: (asset?: { key: string } | null) =>
+    Promise.resolve(asset ? { ...asset, url: `signed:${asset.key}` } : undefined),
+} as unknown as MediaService;
 
 const owner = { id: 'u1', username: 'owner', level: Level.A1, score: 50 } as User;
 
@@ -103,6 +111,7 @@ class FakeMatchStore {
 describe('MatchService', () => {
   let backend: FakeRedisBackend;
   let results: { persist: jest.Mock };
+  let questionService: { getRandomQuestions: jest.Mock };
   // Dos "instancias" de la API sobre el mismo Redis.
   let instanceA: MatchService;
   let instanceB: MatchService;
@@ -110,9 +119,10 @@ describe('MatchService', () => {
   const createService = () =>
     new MatchService(
       new FakeMatchStore(backend) as unknown as MatchStore,
-      {} as QuestionService,
-      {} as UniqueNamesAdapter,
+      questionService as unknown as QuestionService,
+      { NamesGenerator: () => 'happy_blue_fox' } as UniqueNamesAdapter,
       results as unknown as MatchResultsService,
+      media,
     );
 
   const seed = (mutate?: (match: Match) => void) => {
@@ -135,6 +145,7 @@ describe('MatchService', () => {
   beforeEach(() => {
     backend = new FakeRedisBackend();
     results = { persist: jest.fn().mockResolvedValue(new Map([['u1', 150]])) };
+    questionService = { getRandomQuestions: jest.fn().mockResolvedValue([question('q1')]) };
     instanceA = createService();
     instanceB = createService();
   });
@@ -261,6 +272,23 @@ describe('MatchService', () => {
     });
   });
 
+  describe('createMatch', () => {
+    it('refuses to create a match when the level has no playable questions', async () => {
+      questionService.getRandomQuestions.mockResolvedValue([]);
+
+      await expect(instanceA.createMatch(Level.A1, ModeMatch.MULTIPLAYER, owner)).rejects.toThrow(
+        'There are no questions available for this level yet',
+      );
+      expect(backend.data.size).toBe(0);
+    });
+
+    it('registers the owner room for reconnection', async () => {
+      const match = await instanceA.createMatch(Level.A1, ModeMatch.MULTIPLAYER, owner);
+
+      expect(backend.userRooms.get('u1')).toBe(match.getRoomId());
+    });
+  });
+
   describe('game loop timeline', () => {
     const started = (m: Match) => m.start();
     const seqOf = async () => (await instanceA.getMatch(ROOM)).getSeq();
@@ -288,6 +316,15 @@ describe('MatchService', () => {
       const result = await instanceA.publishNextQuestion(ROOM, seq, T0, now);
 
       expect(result).toMatchObject({ kind: 'question', startsAt: now + MIN_QUESTION_LEAD_MS });
+    });
+
+    it('signs question media when sending it, not with the stored URL', async () => {
+      seed((m) => m.start());
+      const result = await instanceA.publishNextQuestion(ROOM, await seqOf(), T0, T0);
+
+      expect(result.kind).toBe('question');
+      if (result.kind !== 'question') return;
+      expect(result.question.media?.url).toBe('signed:image/q1.png');
     });
 
     it('does not send options correctness to clients', async () => {

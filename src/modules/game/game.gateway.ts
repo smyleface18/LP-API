@@ -7,7 +7,7 @@ import {
   OnGatewayConnection,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { BadRequestException, Logger } from '@nestjs/common';
+import { BadRequestException, Logger, UseFilters } from '@nestjs/common';
 import { Server } from 'socket.io';
 import { User } from '@/db/entities';
 import { Repository } from 'typeorm';
@@ -20,8 +20,10 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { WsAuthService } from '@/common/src/ws-auth/ws-auth.service';
 import { GameService } from './game.service';
 import { MediaService } from '../media/media.service';
+import { WsHttpExceptionFilter } from '@/common/src/api/ws-exception.filter';
 import { MatchNotFoundError } from './match/domain/exceptions/match-not-found.error';
 
+@UseFilters(WsHttpExceptionFilter)
 @WebSocketGateway({
   namespace: '/game',
   cors: {

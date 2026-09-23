@@ -48,11 +48,27 @@ export class QuestionService {
     return await this.repo.delete(id);
   }
 
+  /**
+   * Preguntas jugables al azar: activas, de una categoría activa del nivel, y
+   * con al menos 2 opciones activas y una correcta (si no, no se pueden
+   * responder). Las URLs de la media NO se firman acá: el match las firma al
+   * publicar cada pregunta, porque una firmada ahora vencería a mitad de partida.
+   */
   async getRandomQuestions(difficulty: Level = Level.A1, limit: number = 10): Promise<Question[]> {
     const randomQuestions = await this.repo
       .createQueryBuilder('question')
       .innerJoin('question.category', 'category')
       .where('category.level = :difficulty', { difficulty })
+      .andWhere('question.active = true')
+      .andWhere('category.active = true')
+      .andWhere(
+        `(SELECT COUNT(*) FROM question_option qo
+          WHERE qo.question_id = question.id AND qo.active = true) >= 2`,
+      )
+      .andWhere(
+        `EXISTS (SELECT 1 FROM question_option qo
+          WHERE qo.question_id = question.id AND qo.active = true AND qo."isCorrect" = true)`,
+      )
       .select('question.id')
       .orderBy('RANDOM()')
       .limit(limit)
@@ -67,12 +83,10 @@ export class QuestionService {
       relations: ['category', 'options', 'media', 'options.media'],
     });
 
-    const signedQuestions = await Promise.all(questions.map((q) => this.signQuestionMedia(q)));
-
     return this.shuffle(
-      signedQuestions.map((q) => ({
+      questions.map((q) => ({
         ...q,
-        options: this.shuffle(q.options),
+        options: this.shuffle(q.options.filter((option) => option.active)),
       })),
     );
   }
