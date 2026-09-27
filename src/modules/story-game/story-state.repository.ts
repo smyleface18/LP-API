@@ -253,7 +253,7 @@ function serializeGame(game: StoryGame): HashOps {
     ],
     del: [],
   };
-  for (const field of ['currentPanel', 'turnEndsAt', 'abandonAt'] as const) {
+  for (const field of ['currentPanel', 'turnEndsAt', 'turnCloseAt', 'abandonAt'] as const) {
     const value = game[field];
     if (value === null) ops.del.push(field);
     else ops.set.push([field, String(value)]);
@@ -270,6 +270,7 @@ function deserializeGame(gameId: string, raw: Record<string, string>): StoryGame
     players: JSON.parse(raw.players) as StoryGame['players'],
     currentPanel: raw.currentPanel === undefined ? null : Number(raw.currentPanel),
     turnEndsAt: raw.turnEndsAt === undefined ? null : Number(raw.turnEndsAt),
+    turnCloseAt: raw.turnCloseAt === undefined ? null : Number(raw.turnCloseAt),
     abandonAt: raw.abandonAt === undefined ? null : Number(raw.abandonAt),
     abandonSeq: Number(raw.abandonSeq ?? 0),
     createdAt: Number(raw.createdAt),

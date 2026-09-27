@@ -17,6 +17,7 @@ const snapshot = (gameId = 'g1'): StorySnapshot => ({
     players: [{ userId: 'alice', username: 'Alice', connected: true, left: false, joinedAt: 1 }],
     currentPanel: null,
     turnEndsAt: null,
+    turnCloseAt: null,
     abandonAt: null,
     abandonSeq: 0,
     createdAt: 1,

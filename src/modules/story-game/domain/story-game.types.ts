@@ -74,7 +74,13 @@ export interface StoryGame {
   /** Orden de entrada al lobby: define los turnos. */
   players: StoryPlayer[];
   currentPanel: number | null;
+  /** Fin del turno que ven los clientes. */
   turnEndsAt: number | null;
+  /**
+   * Cuándo corre `close-turn`. Igual a `turnEndsAt`, salvo que el turno haya
+   * vencido con una revisión en curso (entonces es el respaldo).
+   */
+  turnCloseAt: number | null;
   /** Cuándo se abandona la partida sin nadie conectado; null si hay alguien conectado. */
   abandonAt: number | null;
   /** Sube cada vez que la partida queda vacía: invalida tareas de abandono viejas. */
@@ -117,8 +123,15 @@ export interface PanelState {
   /** Revisiones exitosas usadas (máx. MAX_REVIEW_ATTEMPTS). */
   attempts: number;
   drafts: PanelDraft[];
+  /** Envíos de borrador en este turno (tope MAX_DRAFTS_PER_TURN), consuman o no intento. */
+  submissions: number;
   /** Revisión en curso: mientras exista se rechaza otro borrador. */
   reviewing: { attemptId: string; startedAt: number } | null;
+  /**
+   * El turno venció con una revisión en curso: al guardarse el resultado se
+   * cierra con ese borrador (`confirmedBy: 'timeout'`).
+   */
+  closeWhenReviewed: boolean;
   /** Último texto escrito por el jugador. */
   originalText: string | null;
   /** Texto que se narra (siempre el corregido). */

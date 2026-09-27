@@ -1,4 +1,5 @@
 import { Level } from '@/db/enum/question.enum';
+import { REVIEW_TIMEOUT_MS } from '@/modules/language-review/language-review.config';
 
 /**
  * Reglas del modo Historieta. Toda la lógica (servicio y DTOs) lee de acá;
@@ -39,12 +40,21 @@ export const MAX_CHARS_PER_PANEL = 320;
 export const MIN_WORDS_PER_PANEL = 8;
 export const MAX_CHARS_PER_SCENE = 200;
 
+/** Tope de envíos de borrador por turno, consuman o no intento (flagged, IA caída). */
+export const MAX_DRAFTS_PER_TURN = 5;
+
 /**
  * Una revisión en curso más vieja que esto se da por perdida (ej. la instancia
- * murió mientras esperaba a la IA) y el autor puede volver a enviar. Cubre el
- * timeout de la IA con su reintento.
+ * murió mientras esperaba a la IA) y el autor puede volver a enviar.
  */
-export const REVIEW_STALE_MS = 30_000;
+export const REVIEW_STALE_MS = REVIEW_TIMEOUT_MS + 4_000;
+
+/**
+ * Si el turno vence con una revisión en curso, se espera su resultado para
+ * cerrar con ese borrador. Como respaldo, `close-turn` se reprograma para
+ * `inicio de la revisión + REVIEW_TIMEOUT_MS + este margen`.
+ */
+export const REVIEW_CLOSE_GRACE_MS = 2_000;
 
 /** Texto de una viñeta cuyo turno venció sin ningún borrador. */
 export const OUT_OF_TIME_TEXT = '(The author ran out of time.)';

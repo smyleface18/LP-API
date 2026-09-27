@@ -37,7 +37,7 @@ TTL: `MATCH_TTL` (se renueva en cada escritura). Todas las claves de una partida
 
 ```text
 story:{gameId}              hash: status, hostId, config (json), players (json, en orden de entrada),
-                            currentPanel, turnEndsAt, abandonAt, abandonSeq, createdAt
+                            currentPanel, turnEndsAt, turnCloseAt, abandonAt, abandonSeq, createdAt
 story:{gameId}:characters   hash: characterId → { id, name, kind, description, createdBy, introducedInPanel }
 story:{gameId}:panels       hash: order → viñeta (PanelState, json)
 story:{gameId}:lock         lock de la partida (RedisLockService)
@@ -60,18 +60,25 @@ Mismo patrón que la trivia (`GameTimeoutQueue`): el servicio emite `story.sched
 | `kind`         | `seq`        | Vale si…                                                    | Qué hace                                         |
 | -------------- | ------------ | ----------------------------------------------------------- | ------------------------------------------------ |
 | `abandon-idle` | `abandonSeq` | LOBBY/PLAYING, mismo `abandonSeq`, nadie conectado          | Pasa a ABANDONED.                                |
-| `close-turn`   | viñeta       | PLAYING, `currentPanel = seq`, `turnEndsAt = dueAt`, abierta | Cierra el turno por tiempo (confirma o rellena). |
+| `close-turn`   | viñeta       | PLAYING, `currentPanel = seq`, `turnCloseAt = dueAt`, abierta | Cierra el turno por tiempo (confirma o rellena), o lo difiere si hay una revisión en curso. |
+
+`turnEndsAt` es el fin del turno que ven los clientes. `turnCloseAt` es cuándo corre `close-turn`: normalmente es igual, salvo cuando el turno vence con una revisión en curso (ver Turnos, punto 4).
+
+Los eventos que dispara un timer llegan a todos los jugadores igual que en la trivia: la tarea corre en una instancia cualquiera, el servicio emite el evento interno, el gateway de esa instancia hace `server.to(gameId).emit(...)` y el `RedisIoAdapter` (main.ts) lo entrega a los sockets de la sala en todas las instancias. `story-game.timers.spec.ts` prueba ese camino de punta a punta hasta `server.to`.
 
 ## Turnos
 
 1. **Abrir.** Al entrar a PLAYING, y al cerrar cada turno, se abre la viñeta siguiente: `turnEndsAt = ahora + turnDurationSec`, se programa `close-turn` y se emite `turnStarted`. La viñeta `i` es de `players[i % n]`; si ese jugador abandonó, es del siguiente en orden (conectado; si no hay, el siguiente que no abandonó).
 2. **Borrador** (`submitPanelDraft`). Se hace en tres pasos, para no tener el lock tomado mientras se espera a la IA:
-   - a) Con lock: valida el turno y el borrador, y marca la viñeta como "en revisión" con un `attemptId`. Mientras tanto se rechaza otro borrador o confirmar (`REVIEW_IN_PROGRESS`), salvo que la revisión tenga más de `REVIEW_STALE_MS` (se da por perdida).
+   - a) Con lock: valida el turno y el borrador, cuenta el envío (tope `MAX_DRAFTS_PER_TURN` = 5 por turno, consuman o no intento: `DRAFT_LIMIT_REACHED`) y marca la viñeta como "en revisión" con un `attemptId`. Mientras tanto se rechaza otro borrador o confirmar (`REVIEW_IN_PROGRESS`), salvo que la revisión tenga más de `REVIEW_STALE_MS` (= `REVIEW_TIMEOUT_MS` + 4 s): se da por perdida.
    - b) Sin lock: revisa el inglés.
    - c) Con lock y guarda (`attemptId`): guarda el resultado solo si la viñeta sigue abierta y la revisión sigue siendo esta. Si el turno se cerró mientras tanto, el resultado se descarta (`TURN_CLOSED`).
    Solo una revisión exitosa y no `flagged` consume intento (máx. `MAX_REVIEW_ATTEMPTS`). Un borrador `flagged` se rechaza. Si la IA no está disponible, el borrador se guarda sin revisión.
 3. **Confirmar** (`confirmPanel`). Cierra la viñeta con el último borrador. Recién ahí los `newCharacters` de ese borrador entran al elenco (los de borradores anteriores se descartan). Se emite `panelConfirmed` y se abre el turno siguiente, o se pasa a PROCESSING si era la última.
 4. **Timeout** (`close-turn`). Si hay borradores, confirma el último (`confirmedBy: 'timeout'`, con sus personajes nuevos). Si no hay ninguno, la viñeta queda con `(The author ran out of time.)` y puntaje 0.
+   Si al vencer hay una revisión en curso, no cierra todavía: marca `closeWhenReviewed`, y cuando se guarda el resultado de esa revisión el turno se cierra con ese borrador (`confirmedBy: 'timeout'`). Como respaldo, `close-turn` se reprograma (misma viñeta) para `inicio de la revisión + REVIEW_TIMEOUT_MS + 2 s`; si corre, cierra con lo que haya. Un borrador enviado después de `endsAt` se rechaza (`TURN_EXPIRED`).
+
+El texto corregido nunca se envía mientras la viñeta está abierta: ni en `panelReviewResult` ni en `gameState`/`getGameState`. Se ve recién cuando la viñeta se confirma (`finalText` de `panelConfirmed`).
 
 Validación del borrador: el DTO valida forma y largos (`MAX_CHARS_PER_PANEL`, `MAX_CHARS_PER_SCENE`, fichas). El servicio valida lo que depende del estado: `MIN_WORDS_PER_PANEL`, que los `characterIds` existan en el elenco, como máximo `MAX_NEW_CHARACTERS_PER_PANEL` nuevos y `MAX_CHARACTERS_PER_PANEL` en total por viñeta (puede no haber ninguno), que el elenco no pase de `MAX_CHARACTERS_PER_STORY` y que los nombres nuevos no se repitan (sin distinguir mayúsculas).
 
@@ -112,7 +119,7 @@ Los errores van por el ack si el cliente lo envió; si no, por `storyError`: `{ 
 
 `GameStateView`: `{ lobby, turn: { panelOrder, authorId, endsAt } | null, storySoFar, cast, myTurn }`. `myTurn` es `null` salvo para el autor del turno en curso: `{ attempts, attemptsLeft, reviewing, drafts }`, con sus borradores y correcciones, sin el texto corregido.
 
-Códigos de error: `VALIDATION_ERROR`, `USER_NOT_FOUND`, `GAME_NOT_FOUND`, `NOT_IN_GAME`, `ALREADY_IN_GAME`, `NOT_A_PLAYER`, `NOT_HOST`, `INVALID_STATE`, `GAME_FULL`, `NOT_ENOUGH_PLAYERS`, `NOT_ENOUGH_PANELS`, `CANNOT_KICK_SELF`, `KICKED`, `NOT_YOUR_TURN`, `TURN_CLOSED`, `TURN_EXPIRED`, `REVIEW_IN_PROGRESS`, `NO_ATTEMPTS_LEFT`, `NO_DRAFT`, `INVALID_DRAFT`, `UNKNOWN_CHARACTER`, `TOO_MANY_CHARACTERS`, `DUPLICATE_CHARACTER_NAME`.
+Códigos de error: `VALIDATION_ERROR`, `USER_NOT_FOUND`, `GAME_NOT_FOUND`, `NOT_IN_GAME`, `ALREADY_IN_GAME`, `NOT_A_PLAYER`, `NOT_HOST`, `INVALID_STATE`, `GAME_FULL`, `NOT_ENOUGH_PLAYERS`, `NOT_ENOUGH_PANELS`, `CANNOT_KICK_SELF`, `KICKED`, `NOT_YOUR_TURN`, `TURN_CLOSED`, `TURN_EXPIRED`, `REVIEW_IN_PROGRESS`, `NO_ATTEMPTS_LEFT`, `DRAFT_LIMIT_REACHED`, `NO_DRAFT`, `INVALID_DRAFT`, `UNKNOWN_CHARACTER`, `TOO_MANY_CHARACTERS`, `DUPLICATE_CHARACTER_NAME`.
 
 ## Reglas del lobby y la conexión
 
@@ -127,7 +134,8 @@ Códigos de error: `VALIDATION_ERROR`, `USER_NOT_FOUND`, `GAME_NOT_FOUND`, `NOT_
 ## Pruebas
 
 - `story-game.service.spec.ts`: lobby, anfitrión, abandono y reconexión.
-- `story-game.turns.spec.ts`: turnos, borradores, personajes, confirmación, timeout (incluido el cierre exactamente una vez, con y sin lock), reasignación y fin anticipado.
+- `story-game.turns.spec.ts`: turnos, borradores, personajes, confirmación, timeout (incluido el cierre exactamente una vez, con y sin lock, y el cierre diferido por una revisión en curso), reasignación y fin anticipado.
+- `story-game.timers.spec.ts`: una tarea de la cola llega hasta `server.to(gameId).emit` (módulo de Nest real con `EventEmitterModule`).
 - `test/story-game/story-harness.ts`: Redis en memoria (emula el script Lua con guarda), reloj controlado y dependencias falsas, compartido por los dos specs anteriores.
 - `story-state.repository.spec.ts`: formato de las claves y de los scripts, con el cliente Redis mockeado. Incluye un bloque contra un Redis real (scripts Lua y guarda) que se salta si no hay `REDIS_TEST_URL`.
 - `queue/story-timeout.queue.spec.ts`: id fijo de la tarea, delay y cancelación.

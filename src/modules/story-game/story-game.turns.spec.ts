@@ -2,7 +2,8 @@ import { LanguageReview } from '@/modules/language-review/language-review.types'
 import { StoryGameService } from './story-game.service';
 import { STORY_EVENTS, PanelConfirmedEvent, TurnStartedEvent } from './domain/story-game.events';
 import { CharacterSheet, DraftInput, StoryStatus } from './domain/story-game.types';
-import { OUT_OF_TIME_TEXT, REVIEW_STALE_MS } from './story-game.config';
+import { MAX_DRAFTS_PER_TURN, OUT_OF_TIME_TEXT, REVIEW_STALE_MS } from './story-game.config';
+import { REVIEW_TIMEOUT_MS } from '@/modules/language-review/language-review.config';
 import {
   createStoryHarness,
   expectStoryError,
@@ -193,6 +194,23 @@ describe('StoryGameService — turns', () => {
       expect([first.reviewAvailable, second.reviewAvailable]).toEqual([false, false]);
       expect(second.attemptsLeft).toBe(2);
       expect((await panelOf(gameId, 0)).drafts).toHaveLength(2);
+    });
+
+    it(`caps the drafts per turn at ${MAX_DRAFTS_PER_TURN}, whether they use an attempt or not`, async () => {
+      h.reviewer.review.mockResolvedValue({
+        correctedText: TEXT,
+        corrections: [],
+        characterCorrections: [],
+        flagged: true,
+      });
+      const gameId = await h.playingWith('alice', 'bob');
+      for (let i = 0; i < MAX_DRAFTS_PER_TURN; i++) {
+        await service.submitPanelDraft(gameId, 'alice', 0, draft());
+      }
+      await expectStoryError(
+        service.submitPanelDraft(gameId, 'alice', 0, draft()),
+        'DRAFT_LIMIT_REACHED',
+      );
     });
 
     it('rejects another draft (or confirming) while a review is in progress', async () => {
@@ -464,6 +482,99 @@ describe('StoryGameService — turns', () => {
 
       await expectStoryError(lateSubmit, 'TURN_CLOSED');
       expect(await panelOf(gameId, 0)).toMatchObject({ scene: 'Reviewed', confirmedBy: 'timeout' });
+    });
+
+    describe('when the turn ends during a review', () => {
+      const START = T0 + TURN_MS - 5_000;
+      const BACKUP = START + REVIEW_TIMEOUT_MS + 2_000;
+
+      /** Borrador enviado 5 s antes del fin; su revisión queda en curso. */
+      async function reviewAtTheBuzzer() {
+        const gameId = await h.playingWith('alice', 'bob');
+        const review = deferred<LanguageReview | null>();
+        h.reviewer.review.mockReturnValueOnce(review.promise);
+        h.clock.now = START;
+        const submit = service.submitPanelDraft(gameId, 'alice', 0, draft({ scene: 'Buzzer' }));
+        await new Promise((resolve) => setImmediate(resolve));
+
+        h.clock.now = T0 + TURN_MS;
+        await service.closeTurnByTimeout(gameId, 0, T0 + TURN_MS);
+        return { gameId, review, submit };
+      }
+
+      it('waits for the review and closes the panel with that draft', async () => {
+        const { gameId, review, submit } = await reviewAtTheBuzzer();
+        expect(confirmed()).toHaveLength(0);
+        expect(await panelOf(gameId, 0)).toMatchObject({
+          status: 'open',
+          closeWhenReviewed: true,
+        });
+
+        h.clock.now = T0 + TURN_MS + 1_500;
+        review.resolve({
+          correctedText: TEXT,
+          corrections: [],
+          characterCorrections: [],
+          flagged: false,
+        });
+        await expect(submit).resolves.toMatchObject({ reviewAvailable: true });
+
+        expect(confirmed()).toEqual([
+          expect.objectContaining({ order: 0, scene: 'Buzzer', confirmedBy: 'timeout' }),
+        ]);
+        expect(turnsStarted().at(-1)).toMatchObject({ panelOrder: 1, authorId: 'bob' });
+      });
+
+      it('reschedules close-turn as a backup and ignores the original job', async () => {
+        const { gameId } = await reviewAtTheBuzzer();
+        expect(h.scheduled('close-turn').at(-1)).toEqual([
+          'story.schedule',
+          { gameId, kind: 'close-turn', seq: 0, dueAt: BACKUP },
+        ]);
+        expect(h.cancelled('close-turn')).toEqual([
+          ['story.cancel', { gameId, kind: 'close-turn', seq: 0, dueAt: T0 + TURN_MS }],
+        ]);
+        expect((await h.gameOf(gameId)).turnEndsAt).toBe(T0 + TURN_MS);
+
+        await service.closeTurnByTimeout(gameId, 0, T0 + TURN_MS);
+        expect(confirmed()).toHaveLength(0);
+      });
+
+      it('closes with what there is when the backup runs and the review never came', async () => {
+        const { gameId, review, submit } = await reviewAtTheBuzzer();
+        h.clock.now = BACKUP;
+        await service.closeTurnByTimeout(gameId, 0, BACKUP);
+
+        expect(confirmed()).toEqual([
+          expect.objectContaining({ finalText: OUT_OF_TIME_TEXT, confirmedBy: 'timeout' }),
+        ]);
+        review.resolve(null);
+        await expectStoryError(submit, 'TURN_CLOSED');
+        expect(confirmed()).toHaveLength(1);
+      });
+
+      it('closes with the previous draft when the late review is flagged', async () => {
+        const gameId = await h.playingWith('alice', 'bob');
+        await service.submitPanelDraft(gameId, 'alice', 0, draft({ scene: 'Earlier' }));
+        const review = deferred<LanguageReview | null>();
+        h.reviewer.review.mockReturnValueOnce(review.promise);
+        h.clock.now = START;
+        const submit = service.submitPanelDraft(gameId, 'alice', 0, draft({ scene: 'Rude' }));
+        await new Promise((resolve) => setImmediate(resolve));
+        h.clock.now = T0 + TURN_MS;
+        await service.closeTurnByTimeout(gameId, 0, T0 + TURN_MS);
+
+        review.resolve({
+          correctedText: TEXT,
+          corrections: [],
+          characterCorrections: [],
+          flagged: true,
+        });
+        await expect(submit).resolves.toMatchObject({ flagged: true });
+        expect(confirmed()).toEqual([
+          expect.objectContaining({ scene: 'Earlier', confirmedBy: 'timeout' }),
+        ]);
+      });
     });
 
     it('closes the turn exactly once when confirm and timeout race', async () => {

@@ -62,8 +62,10 @@ function freshPanel(order: number, authorId: string): PanelState {
     authorId,
     status: 'open',
     attempts: 0,
+    submissions: 0,
     drafts: [],
     reviewing: null,
+    closeWhenReviewed: false,
     originalText: null,
     finalText: null,
     scene: null,
@@ -85,6 +87,7 @@ export function openTurn(
   snapshot.panels[order] = panel;
   game.currentPanel = order;
   game.turnEndsAt = now + game.config.turnDurationSec * 1000;
+  game.turnCloseAt = game.turnEndsAt;
   return panel;
 }
 
@@ -219,6 +222,7 @@ export function confirmPanel(
 
   panel.status = 'closed';
   panel.reviewing = null;
+  panel.closeWhenReviewed = false;
   panel.confirmedBy = confirmedBy;
 
   return {

@@ -14,8 +14,9 @@ export type StoryJobKind = 'abandon-idle' | 'close-turn';
  * ms, servidor).
  *
  * - abandon-idle: seq = `abandonSeq` de la partida.
- * - close-turn: seq = número de viñeta; dueAt = `turnEndsAt` del turno. Si la
- *   viñeta se reasignó (su autor abandonó), el turno nuevo tiene otro dueAt.
+ * - close-turn: seq = número de viñeta; dueAt = `turnCloseAt` (el fin del
+ *   turno, o el respaldo si venció con una revisión en curso). Si la viñeta
+ *   se reasignó (su autor abandonó), el turno nuevo tiene otro dueAt.
  */
 export interface StoryJob {
   gameId: string;

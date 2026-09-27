@@ -18,6 +18,7 @@ export type StoryErrorCode =
   | 'TURN_EXPIRED'
   | 'REVIEW_IN_PROGRESS'
   | 'NO_ATTEMPTS_LEFT'
+  | 'DRAFT_LIMIT_REACHED'
   | 'NO_DRAFT'
   | 'INVALID_DRAFT'
   | 'UNKNOWN_CHARACTER'

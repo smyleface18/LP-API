@@ -36,9 +36,12 @@ import {
   validateDraft,
 } from './domain/story-turns';
 import { GameStateView, PanelReviewResultView, toGameStateView } from './domain/story-game.views';
+import { REVIEW_TIMEOUT_MS } from '@/modules/language-review/language-review.config';
 import {
   IDLE_ABANDON_DELAY_MS,
+  MAX_DRAFTS_PER_TURN,
   MAX_REVIEW_ATTEMPTS,
+  REVIEW_CLOSE_GRACE_MS,
   REVIEW_STALE_MS,
   STORY_DEFAULT_CONFIG,
   STORY_MAX_PLAYERS,
@@ -85,6 +88,7 @@ export class StoryGameService {
         ],
         currentPanel: null,
         turnEndsAt: null,
+        turnCloseAt: null,
         abandonAt: null,
         abandonSeq: 0,
         createdAt: now,
@@ -242,6 +246,13 @@ export class StoryGameService {
         );
       }
       this.assertNotReviewing(panel, now);
+      if (panel.submissions >= MAX_DRAFTS_PER_TURN) {
+        throw new StoryError(
+          'DRAFT_LIMIT_REACHED',
+          `You already sent ${MAX_DRAFTS_PER_TURN} drafts for this panel; confirm it`,
+          HttpStatus.CONFLICT,
+        );
+      }
       if (panel.attempts >= MAX_REVIEW_ATTEMPTS) {
         throw new StoryError(
           'NO_ATTEMPTS_LEFT',
@@ -251,6 +262,7 @@ export class StoryGameService {
       }
       validateDraft(snapshot, draft);
 
+      panel.submissions += 1;
       panel.reviewing = { attemptId, startedAt: now };
       reviewInput = {
         text: draft.text,
@@ -266,7 +278,7 @@ export class StoryGameService {
     const review = await this.reviewSafely(reviewInput!);
 
     let result: PanelReviewResultView | undefined;
-    await this.mutate(gameId, (snapshot) => {
+    await this.mutate(gameId, (snapshot, outbox) => {
       const panel = snapshot.panels[panelOrder];
       if (
         snapshot.game.status !== StoryStatus.PLAYING ||
@@ -287,7 +299,13 @@ export class StoryGameService {
         if (review) panel.attempts += 1;
         result = this.reviewResult(panel, review);
       }
-      return { setPanels: [panel], guard: { order: panelOrder, attemptId } };
+
+      const guard = { order: panelOrder, attemptId };
+      if (panel.closeWhenReviewed) {
+        // El turno venció mientras se revisaba: se cierra con este borrador.
+        return { ...this.closeTurn(snapshot, panel, 'timeout', outbox, Date.now()), guard };
+      }
+      return { setPanels: [panel], guard };
     });
 
     return result!;
@@ -308,8 +326,13 @@ export class StoryGameService {
 
   /**
    * Tarea diferida `close-turn`: venció el turno de la viñeta `seq`. Si ya se
-   * cerró (confirmación), se reasignó (otro dueAt) o la partida cambió, la
-   * tarea está obsoleta y no hace nada.
+   * cerró (confirmación), se reasignó o se reprogramó (otro dueAt) o la
+   * partida cambió, la tarea está obsoleta y no hace nada.
+   *
+   * Si hay una revisión en curso, no se cierra todavía: se marca
+   * `closeWhenReviewed` (el resultado cierra el turno con ese borrador) y la
+   * tarea se reprograma como respaldo. Cuando corre el respaldo, se cierra con
+   * lo que haya.
    */
   async closeTurnByTimeout(gameId: string, seq: number, dueAt: number): Promise<void> {
     try {
@@ -319,12 +342,22 @@ export class StoryGameService {
         if (
           game.status !== StoryStatus.PLAYING ||
           game.currentPanel !== seq ||
-          game.turnEndsAt !== dueAt ||
+          game.turnCloseAt !== dueAt ||
           panel?.status !== 'open'
         ) {
           return null;
         }
-        return this.closeTurn(snapshot, panel, 'timeout', outbox, Date.now());
+
+        const now = Date.now();
+        if (panel.reviewing && !panel.closeWhenReviewed) {
+          const backupAt = panel.reviewing.startedAt + REVIEW_TIMEOUT_MS + REVIEW_CLOSE_GRACE_MS;
+          if (backupAt > now) {
+            panel.closeWhenReviewed = true;
+            game.turnCloseAt = backupAt;
+            return { game, setPanels: [panel], guard: { order: seq } };
+          }
+        }
+        return this.closeTurn(snapshot, panel, 'timeout', outbox, now);
       });
     } catch (error) {
       if (error instanceof StoryError && ['GAME_NOT_FOUND', 'TURN_CLOSED'].includes(error.code)) {
@@ -504,13 +537,13 @@ export class StoryGameService {
     if (
       game.status === StoryStatus.PLAYING &&
       game.currentPanel !== null &&
-      game.turnEndsAt !== null
+      game.turnCloseAt !== null
     ) {
       jobs.push({
         gameId: game.gameId,
         kind: 'close-turn',
         seq: game.currentPanel,
-        dueAt: game.turnEndsAt,
+        dueAt: game.turnCloseAt,
       });
     }
     return jobs;
@@ -638,6 +671,7 @@ export class StoryGameService {
     const { game } = snapshot;
     game.currentPanel = null;
     game.turnEndsAt = null;
+    game.turnCloseAt = null;
     game.abandonAt = null;
 
     if (closedPanels(snapshot).length === 0) {
