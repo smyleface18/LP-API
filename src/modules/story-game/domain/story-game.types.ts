@@ -3,7 +3,9 @@ import { StoryLanguage, StoryLevel, StoryTurnDurationSec } from '../story-game.c
 /**
  * Estados de la partida. Solo el servidor los cambia:
  *   LOBBY → PLAYING → PROCESSING → REVIEW → FINISHED
- *   cualquiera → ABANDONED (no quedan jugadores conectados; en LOBBY tras una espera)
+ *   LOBBY/PLAYING → ABANDONED (nadie conectado durante IDLE_ABANDON_DELAY_MS)
+ * PROCESSING y REVIEW nunca se abandonan: la historieta se termina de generar
+ * y se guarda aunque todos se hayan ido.
  */
 export enum StoryStatus {
   LOBBY = 'LOBBY',
@@ -13,6 +15,12 @@ export enum StoryStatus {
   FINISHED = 'FINISHED',
   ABANDONED = 'ABANDONED',
 }
+
+/** Estados en los que una partida sin nadie conectado puede abandonarse. */
+export const STORY_ABANDONABLE_STATUSES: readonly StoryStatus[] = [
+  StoryStatus.LOBBY,
+  StoryStatus.PLAYING,
+];
 
 /** Estados en los que la partida ya no admite cambios. */
 export const STORY_ENDED_STATUSES: readonly StoryStatus[] = [
@@ -66,9 +74,9 @@ export interface StoryGame {
   players: StoryPlayer[];
   currentPanel: number | null;
   turnEndsAt: number | null;
-  /** Cuándo se abandona el lobby vacío; null si hay alguien conectado. */
+  /** Cuándo se abandona la partida sin nadie conectado; null si hay alguien conectado. */
   abandonAt: number | null;
-  /** Sube cada vez que el lobby queda vacío: invalida tareas de abandono viejas. */
+  /** Sube cada vez que la partida queda vacía: invalida tareas de abandono viejas. */
   abandonSeq: number;
   createdAt: number;
 }

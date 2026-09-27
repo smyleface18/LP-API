@@ -7,6 +7,7 @@ import { UniqueNamesAdapter } from '@/common/src/unique-names/unique-names.adapt
 import { StoryChanges, StoryStateRepository } from './story-state.repository';
 import { StoryError } from './domain/story-game.errors';
 import {
+  STORY_ABANDONABLE_STATUSES,
   STORY_ENDED_STATUSES,
   StoryConfig,
   StoryGame,
@@ -14,7 +15,7 @@ import {
   StoryStatus,
 } from './domain/story-game.types';
 import {
-  LOBBY_ABANDON_DELAY_MS,
+  IDLE_ABANDON_DELAY_MS,
   STORY_DEFAULT_CONFIG,
   STORY_MAX_PLAYERS,
   STORY_MIN_PLAYERS,
@@ -256,26 +257,35 @@ export class StoryGameService {
   }
 
   /**
-   * Tarea diferida `abandon-lobby`: el lobby siguió vacío durante
-   * LOBBY_ABANDON_DELAY_MS. Si alguien volvió (o el lobby se vació otra vez
-   * después, con otro `abandonSeq`), la tarea está obsoleta y no hace nada.
+   * Tarea diferida `abandon-idle`: la partida siguió sin nadie conectado durante
+   * IDLE_ABANDON_DELAY_MS. Si alguien volvió, si la partida se vació otra vez
+   * después (otro `abandonSeq`) o si ya no está en LOBBY/PLAYING, la tarea
+   * está obsoleta y no hace nada.
    */
-  async abandonIdleLobby(gameId: string, seq: number): Promise<void> {
+  async abandonIdleGame(gameId: string, seq: number): Promise<void> {
     try {
       await this.mutate(gameId, ({ game }) => {
-        if (game.status !== StoryStatus.LOBBY) return null;
+        if (!STORY_ABANDONABLE_STATUSES.includes(game.status)) return null;
         if (game.abandonAt === null || game.abandonSeq !== seq) return null;
         if (game.players.some((player) => player.connected && !player.left)) return null;
 
         game.status = StoryStatus.ABANDONED;
         game.abandonAt = null;
-        this.logger.log(`story ${gameId} abandoned (empty lobby)`);
+        this.logger.log(`story ${gameId} abandoned (nobody came back)`);
         return { game };
       });
     } catch (error) {
       // Expiró por TTL: no queda nada que abandonar.
       if (!(error instanceof StoryError && error.code === 'GAME_NOT_FOUND')) throw error;
     }
+  }
+
+  /**
+   * Partida activa del usuario. Sale de Redis y no del socket: así vale en
+   * todas las instancias y no queda desactualizada si lo expulsan desde otra.
+   */
+  getActiveGameId(userId: string): Promise<string | null> {
+    return this.store.getUserGame(userId);
   }
 
   async getSnapshot(gameId: string): Promise<StorySnapshot> {
@@ -307,18 +317,18 @@ export class StoryGameService {
       return { previous, next };
     });
 
-    await this.syncLobbyTimer(previous, next.game);
+    await this.syncAbandonTimer(previous, next.game);
     return next;
   }
 
-  /** Programa la tarea de abandono si el lobby quedó vacío y borra la anterior si ya no vale. */
-  private async syncLobbyTimer(previous: StoryGame, next: StoryGame) {
+  /** Programa la tarea de abandono si la partida quedó vacía y borra la anterior si ya no vale. */
+  private async syncAbandonTimer(previous: StoryGame, next: StoryGame) {
     const job = (game: StoryGame): StoryJob | null =>
       game.abandonAt === null
         ? null
         : {
             gameId: game.gameId,
-            kind: 'abandon-lobby',
+            kind: 'abandon-idle',
             seq: game.abandonSeq,
             dueAt: game.abandonAt,
           };
@@ -331,7 +341,7 @@ export class StoryGameService {
     if (after) await this.eventEmitter.emitAsync(STORY_SCHEDULE_EVENT, after);
   }
 
-  /** Alguien (re)conectó: el lobby deja de estar vacío y el anfitrión tiene que estar conectado. */
+  /** Alguien (re)conectó: la partida deja de estar vacía y el anfitrión tiene que estar conectado. */
   private onPlayerConnected(game: StoryGame) {
     game.abandonAt = null;
 
@@ -340,24 +350,26 @@ export class StoryGameService {
   }
 
   /**
-   * Se fue o se desconectó alguien. Sin nadie conectado: en LOBBY se espera
-   * LOBBY_ABANDON_DELAY_MS (pueden volver); en el resto, o si el lobby quedó
-   * sin jugadores, la partida se abandona.
+   * Se fue o se desconectó alguien. En LOBBY/PLAYING sin nadie conectado se
+   * espera IDLE_ABANDON_DELAY_MS por si vuelven (ej. un redeploy corta todos
+   * los sockets); si ya nadie puede volver (todos salieron), se abandona en el
+   * acto. PROCESSING y REVIEW nunca se abandonan.
    */
   private onPlayerGone(game: StoryGame) {
+    if (!STORY_ABANDONABLE_STATUSES.includes(game.status)) return;
     if (game.players.some((player) => player.connected && !player.left)) return;
 
-    if (game.status === StoryStatus.LOBBY && game.players.length > 0) {
-      if (game.abandonAt === null) {
-        game.abandonSeq += 1;
-        game.abandonAt = Date.now() + LOBBY_ABANDON_DELAY_MS;
-      }
+    if (!game.players.some((player) => !player.left)) {
+      game.status = StoryStatus.ABANDONED;
+      game.abandonAt = null;
+      this.logger.log(`story ${game.gameId} abandoned (everyone left)`);
       return;
     }
 
-    game.status = StoryStatus.ABANDONED;
-    game.abandonAt = null;
-    this.logger.log(`story ${game.gameId} abandoned`);
+    if (game.abandonAt === null) {
+      game.abandonSeq += 1;
+      game.abandonAt = Date.now() + IDLE_ABANDON_DELAY_MS;
+    }
   }
 
   private async findUser(userId: string): Promise<User> {

@@ -8,7 +8,7 @@ import { StoryGameService } from './story-game.service';
 import { StoryChanges, StoryStateRepository } from './story-state.repository';
 import { StoryError, StoryErrorCode } from './domain/story-game.errors';
 import { StoryGame, StorySnapshot, StoryStatus } from './domain/story-game.types';
-import { LOBBY_ABANDON_DELAY_MS } from './story-game.config';
+import { IDLE_ABANDON_DELAY_MS } from './story-game.config';
 import { STORY_CANCEL_EVENT, STORY_SCHEDULE_EVENT } from './queue/type';
 
 /**
@@ -111,6 +111,13 @@ describe('StoryGameService', () => {
   }
 
   const gameOf = async (gameId: string) => (await service.getSnapshot(gameId)).game;
+
+  /** Lleva la partida a un estado de fases posteriores (todavía sin transición propia). */
+  async function forceStatus(gameId: string, status: StoryStatus) {
+    const snapshot = (await store.get(gameId))!;
+    snapshot.game.status = status;
+    store.games.set(gameId, JSON.stringify(snapshot));
+  }
   type EmitCall = [string, unknown];
   const scheduled = () =>
     (events.emitAsync.mock.calls as EmitCall[]).filter(([event]) => event === STORY_SCHEDULE_EVENT);
@@ -368,16 +375,16 @@ describe('StoryGameService', () => {
       const snapshot = await service.disconnect(gameId, 'alice');
 
       expect(snapshot?.game.status).toBe(StoryStatus.LOBBY);
-      expect(snapshot?.game.abandonAt).toBe(T0 + LOBBY_ABANDON_DELAY_MS);
+      expect(snapshot?.game.abandonAt).toBe(T0 + IDLE_ABANDON_DELAY_MS);
       expect(scheduled()).toEqual([
         [
           STORY_SCHEDULE_EVENT,
-          { gameId, kind: 'abandon-lobby', seq: 1, dueAt: T0 + LOBBY_ABANDON_DELAY_MS },
+          { gameId, kind: 'abandon-idle', seq: 1, dueAt: T0 + IDLE_ABANDON_DELAY_MS },
         ],
       ]);
 
-      now += LOBBY_ABANDON_DELAY_MS;
-      await service.abandonIdleLobby(gameId, 1);
+      now += IDLE_ABANDON_DELAY_MS;
+      await service.abandonIdleGame(gameId, 1);
       expect((await gameOf(gameId)).status).toBe(StoryStatus.ABANDONED);
     });
 
@@ -391,13 +398,13 @@ describe('StoryGameService', () => {
       expect(cancelled()).toEqual([
         [
           STORY_CANCEL_EVENT,
-          { gameId, kind: 'abandon-lobby', seq: 1, dueAt: T0 + LOBBY_ABANDON_DELAY_MS },
+          { gameId, kind: 'abandon-idle', seq: 1, dueAt: T0 + IDLE_ABANDON_DELAY_MS },
         ],
       ]);
 
       // Aunque la tarea corra igual (no se pudo borrar), está obsoleta.
-      now = T0 + LOBBY_ABANDON_DELAY_MS;
-      await service.abandonIdleLobby(gameId, 1);
+      now = T0 + IDLE_ABANDON_DELAY_MS;
+      await service.abandonIdleGame(gameId, 1);
       expect((await gameOf(gameId)).status).toBe(StoryStatus.LOBBY);
     });
 
@@ -408,12 +415,12 @@ describe('StoryGameService', () => {
       now += 10_000;
       await service.disconnect(gameId, 'alice'); // seq 2, vence más tarde
 
-      now = T0 + LOBBY_ABANDON_DELAY_MS;
-      await service.abandonIdleLobby(gameId, 1);
+      now = T0 + IDLE_ABANDON_DELAY_MS;
+      await service.abandonIdleGame(gameId, 1);
       expect((await gameOf(gameId)).status).toBe(StoryStatus.LOBBY);
 
-      now = T0 + 10_000 + LOBBY_ABANDON_DELAY_MS;
-      await service.abandonIdleLobby(gameId, 2);
+      now = T0 + 10_000 + IDLE_ABANDON_DELAY_MS;
+      await service.abandonIdleGame(gameId, 2);
       expect((await gameOf(gameId)).status).toBe(StoryStatus.ABANDONED);
     });
 
@@ -441,16 +448,68 @@ describe('StoryGameService', () => {
       expect(scheduled()).toHaveLength(1);
     });
 
-    it('abandons a PLAYING game right away when nobody is connected', async () => {
+    it('gives a PLAYING game the same 60 s margin', async () => {
       const gameId = await playingWith('alice', 'bob');
       await service.disconnect(gameId, 'bob');
       const snapshot = await service.disconnect(gameId, 'alice');
-      expect(snapshot?.game.status).toBe(StoryStatus.ABANDONED);
+      expect(snapshot?.game.status).toBe(StoryStatus.PLAYING);
+      expect(scheduled()).toHaveLength(1);
+
+      now += IDLE_ABANDON_DELAY_MS;
+      await service.abandonIdleGame(gameId, 1);
+      expect((await gameOf(gameId)).status).toBe(StoryStatus.ABANDONED);
+    });
+
+    it('survives a redeploy: everyone drops and comes back within the margin', async () => {
+      const gameId = await playingWith('alice', 'bob', 'carol');
+      for (const id of ['alice', 'bob', 'carol']) await service.disconnect(gameId, id);
+      now += 5_000;
+      for (const id of ['carol', 'alice', 'bob']) await service.resume(id);
+
+      now = T0 + IDLE_ABANDON_DELAY_MS;
+      await service.abandonIdleGame(gameId, 1);
+      const game = await gameOf(gameId);
+      expect(game.status).toBe(StoryStatus.PLAYING);
+      expect(game.abandonAt).toBeNull();
+      expect(game.hostId).toBe('carol'); // el primero que volvió
+    });
+
+    it('abandons a PLAYING game right away when every player left', async () => {
+      const gameId = await playingWith('alice', 'bob');
+      await service.leaveGame(gameId, 'bob');
+      const { game } = await service.leaveGame(gameId, 'alice');
+      expect(game.status).toBe(StoryStatus.ABANDONED);
       expect(scheduled()).toHaveLength(0);
     });
 
+    it.each([StoryStatus.PROCESSING, StoryStatus.REVIEW])(
+      'never abandons a game in %s',
+      async (status) => {
+        const gameId = await playingWith('alice', 'bob');
+        await forceStatus(gameId, status);
+
+        await service.disconnect(gameId, 'alice');
+        await service.leaveGame(gameId, 'bob');
+        const game = await gameOf(gameId);
+        expect(game.status).toBe(status);
+        expect(game.abandonAt).toBeNull();
+        expect(scheduled()).toHaveLength(0);
+      },
+    );
+
+    it('drops a pending abandon job once the game reached PROCESSING', async () => {
+      const gameId = await playingWith('alice', 'bob');
+      await service.disconnect(gameId, 'bob');
+      await service.disconnect(gameId, 'alice'); // abandon-idle seq 1 pendiente
+      await forceStatus(gameId, StoryStatus.PROCESSING);
+
+      now += IDLE_ABANDON_DELAY_MS;
+      await service.abandonIdleGame(gameId, 1);
+      expect((await gameOf(gameId)).status).toBe(StoryStatus.PROCESSING);
+    });
+
     it('ignores the abandon job of a game that expired', async () => {
-      await expect(service.abandonIdleLobby('expired', 1)).resolves.toBeUndefined();
+      await expect(service.abandonIdleGame('expired', 1)).resolves.toBeUndefined();
     });
   });
 
@@ -463,6 +522,8 @@ describe('StoryGameService', () => {
       const gameId = await playingWith('alice', 'bob');
       await service.disconnect(gameId, 'bob');
       await service.disconnect(gameId, 'alice');
+      now += IDLE_ABANDON_DELAY_MS;
+      await service.abandonIdleGame(gameId, 1);
       expect(await service.resume('alice')).toBeNull();
       expect(await store.getUserGame('alice')).toBeNull();
     });

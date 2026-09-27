@@ -25,8 +25,9 @@ import { STORY_ERROR_EVENT, StorySocket, storyUserRoom } from './types';
 /**
  * Namespace /story (modo Historieta). Solo traduce eventos: las reglas viven
  * en StoryGameService. La sala de Socket.IO es el gameId; además cada socket
- * está en `user:{userId}` para poder avisarle a un usuario en cualquier
- * instancia. El adapter de Redis difunde entre instancias.
+ * está en `user:{userId}`, para hablarle a un usuario (o sacarlo de una sala)
+ * en cualquier instancia. El adapter de Redis difunde entre instancias. La
+ * partida actual de cada usuario se lee de Redis en cada evento.
  */
 @UseFilters(new WsHttpExceptionFilter(STORY_ERROR_EVENT))
 @UsePipes(createStoryValidationPipe())
@@ -58,10 +59,12 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   async handleDisconnect(@ConnectedSocket() client: StorySocket) {
-    const { userId, gameId } = client.data;
-    if (!userId || !gameId) return;
+    const { userId } = client.data;
+    if (!userId) return;
 
     try {
+      const gameId = await this.storyGameService.getActiveGameId(userId);
+      if (!gameId) return;
       const snapshot = await this.storyGameService.disconnect(gameId, userId);
       if (snapshot) this.broadcast(snapshot);
     } catch (error) {
@@ -75,7 +78,7 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
       const snapshot = await this.storyGameService.resume(client.data.userId);
       if (!snapshot) return;
 
-      await this.enterRoom(client, snapshot.game.gameId);
+      await client.join(snapshot.game.gameId);
       this.broadcast(snapshot);
     } catch (error) {
       this.logger.warn(`resume failed for ${client.data.userId}: ${(error as Error).message}`);
@@ -85,7 +88,7 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('createStoryGame')
   async handleCreate(@ConnectedSocket() client: StorySocket): Promise<ApiResponse<LobbyView>> {
     const snapshot = await this.storyGameService.createGame(client.data.userId);
-    await this.enterRoom(client, snapshot.game.gameId);
+    this.enterRoom(client.data.userId, snapshot.game.gameId);
     this.broadcast(snapshot);
     return { ok: true, data: toLobbyView(snapshot), message: 'story game created' };
   }
@@ -96,7 +99,7 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
     @ConnectedSocket() client: StorySocket,
   ): Promise<ApiResponse<LobbyView>> {
     const snapshot = await this.storyGameService.joinGame(dto.gameId, client.data.userId);
-    await this.enterRoom(client, snapshot.game.gameId);
+    this.enterRoom(client.data.userId, snapshot.game.gameId);
     this.broadcast(snapshot);
     return { ok: true, data: toLobbyView(snapshot), message: 'story game joined' };
   }
@@ -107,7 +110,7 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
     @ConnectedSocket() client: StorySocket,
   ): Promise<ApiResponse<LobbyView>> {
     const snapshot = await this.storyGameService.updateConfig(
-      this.requireGameId(client),
+      await this.requireGameId(client),
       client.data.userId,
       dto,
     );
@@ -120,7 +123,7 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
     @MessageBody() dto: KickPlayerDto,
     @ConnectedSocket() client: StorySocket,
   ): Promise<ApiResponse<LobbyView>> {
-    const gameId = this.requireGameId(client);
+    const gameId = await this.requireGameId(client);
     const snapshot = await this.storyGameService.kickPlayer(gameId, client.data.userId, dto.userId);
 
     // El expulsado puede estar conectado a otra instancia: se le habla por su sala personal.
@@ -141,7 +144,7 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
   @SubscribeMessage('startStory')
   async handleStartStory(@ConnectedSocket() client: StorySocket): Promise<ApiResponse<LobbyView>> {
     const snapshot = await this.storyGameService.startStory(
-      this.requireGameId(client),
+      await this.requireGameId(client),
       client.data.userId,
     );
     this.broadcast(snapshot);
@@ -150,22 +153,22 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   @SubscribeMessage('leaveGame')
   async handleLeave(@ConnectedSocket() client: StorySocket): Promise<ApiResponse<null>> {
-    const gameId = this.requireGameId(client);
+    const gameId = await this.requireGameId(client);
     const snapshot = await this.storyGameService.leaveGame(gameId, client.data.userId);
 
-    await client.leave(gameId);
-    client.data.gameId = undefined;
+    // Todos los sockets del usuario, en cualquier instancia.
+    this.server.in(storyUserRoom(client.data.userId)).socketsLeave(gameId);
     this.broadcast(snapshot);
     return { ok: true, data: null, message: 'left the game' };
   }
 
-  private async enterRoom(client: StorySocket, gameId: string) {
-    await client.join(gameId);
-    client.data.gameId = gameId;
+  /** Mete a la sala todos los sockets del usuario (puede tener la app abierta en otra instancia). */
+  private enterRoom(userId: string, gameId: string) {
+    this.server.in(storyUserRoom(userId)).socketsJoin(gameId);
   }
 
-  private requireGameId(client: StorySocket): string {
-    const { gameId } = client.data;
+  private async requireGameId(client: StorySocket): Promise<string> {
+    const gameId = await this.storyGameService.getActiveGameId(client.data.userId);
     if (!gameId) throw new StoryError('NOT_IN_GAME', 'Join a story game first');
     return gameId;
   }

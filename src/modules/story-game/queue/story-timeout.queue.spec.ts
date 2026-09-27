@@ -6,7 +6,7 @@ describe('StoryTimeoutQueue', () => {
   const now = 1_800_000_000_000;
   const job: StoryJob = {
     gameId: 'brave-red-fox',
-    kind: 'abandon-lobby',
+    kind: 'abandon-idle',
     seq: 2,
     dueAt: now + 60_000,
   };
@@ -23,8 +23,8 @@ describe('StoryTimeoutQueue', () => {
 
   it('adds a delayed job with a deterministic id', async () => {
     await timeouts.schedule(job);
-    expect(queue.add).toHaveBeenCalledWith('abandon-lobby', job, {
-      jobId: 'brave-red-fox__2__abandon-lobby__1800000060000',
+    expect(queue.add).toHaveBeenCalledWith('abandon-idle', job, {
+      jobId: 'brave-red-fox__2__abandon-idle__1800000060000',
       delay: 60_000,
       removeOnComplete: true,
       removeOnFail: true,
@@ -34,7 +34,7 @@ describe('StoryTimeoutQueue', () => {
   it('never uses a negative delay', async () => {
     await timeouts.schedule({ ...job, dueAt: now - 5 });
     expect(queue.add).toHaveBeenCalledWith(
-      'abandon-lobby',
+      'abandon-idle',
       expect.anything(),
       expect.objectContaining({ delay: 0 }),
     );
@@ -42,7 +42,7 @@ describe('StoryTimeoutQueue', () => {
 
   it('removes the job by the same id and swallows failures', async () => {
     await timeouts.cancel(job);
-    expect(queue.remove).toHaveBeenCalledWith('brave-red-fox__2__abandon-lobby__1800000060000');
+    expect(queue.remove).toHaveBeenCalledWith('brave-red-fox__2__abandon-idle__1800000060000');
 
     queue.remove.mockRejectedValue(new Error('locked'));
     await expect(timeouts.cancel(job)).resolves.toBeUndefined();

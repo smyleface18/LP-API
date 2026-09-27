@@ -21,8 +21,10 @@ Estado actual: **Fase 1** (lobby). Turnos y personajes, revisión con IA, audio 
 
 ```text
 LOBBY → PLAYING → PROCESSING → REVIEW → FINISHED
-cualquier estado → ABANDONED (no quedan jugadores conectados)
+LOBBY/PLAYING → ABANDONED (nadie conectado durante 60 s, o todos salieron)
 ```
+
+PROCESSING y REVIEW nunca se abandonan: la historieta se termina de generar y se guarda en el historial aunque todos se hayan ido.
 
 Solo el servidor cambia el estado. Un evento que no corresponde al estado actual devuelve `INVALID_STATE`.
 
@@ -49,12 +51,14 @@ Mismo patrón que la trivia (`GameTimeoutQueue`): el servicio emite `story.sched
 
 | `kind`          | `seq`        | Qué hace                                                                    |
 | --------------- | ------------ | --------------------------------------------------------------------------- |
-| `abandon-lobby` | `abandonSeq` | Si el lobby sigue sin nadie conectado a los 60 s, pasa a ABANDONED.          |
+| `abandon-idle`  | `abandonSeq` | Si la partida (LOBBY o PLAYING) sigue sin nadie conectado a los 60 s, pasa a ABANDONED. |
 | `close-turn`    | viñeta       | (Fase 2) Cierra el turno por tiempo.                                        |
 
 ## Eventos
 
-Autenticación: token de Cognito en `handshake.auth.token` (`WsAuthService.authenticateSocket`). Cada socket entra además a su sala personal `user:{userId}`, para poder avisarle en cualquier instancia (ej. `KICKED`).
+Autenticación: token de Cognito en `handshake.auth.token` (`WsAuthService.authenticateSocket`). Cada socket entra además a su sala personal `user:{userId}`. Con ella el servidor le habla a un usuario, o saca de una sala a todos sus sockets, en cualquier instancia: `KICKED`, `leaveGame` y, desde la Fase 2, los eventos que van solo al autor.
+
+La partida actual de cada usuario no se guarda en el socket: el gateway la lee de Redis (`user:{userId}:story`) en cada evento, así nunca queda desactualizada (por ejemplo, si lo expulsan desde otra instancia).
 
 Los errores van por el ack si el cliente lo envió; si no, por `storyError`: `{ ok: false, status, message, code }`.
 
@@ -80,12 +84,14 @@ Códigos de error: `VALIDATION_ERROR`, `USER_NOT_FOUND`, `GAME_NOT_FOUND`, `NOT_
 - Desconexión: el jugador queda `connected: false` y vuelve al reconectarse (a cualquier instancia).
 - Si el anfitrión se desconecta o sale, el anfitrión pasa al siguiente jugador conectado en orden (circular). No se devuelve al reconectarse. Si no había nadie conectado, lo recibe el primero que vuelve.
 - Salir en LOBBY quita al jugador. Salir después lo marca `left: true` y lo deja en la lista, porque el orden define los turnos.
-- Lobby sin nadie conectado: se programa `abandon-lobby` a 60 s; si alguien vuelve o se une, se invalida. Si el lobby queda sin jugadores, se abandona en el acto.
-- Fuera del lobby, sin nadie conectado → ABANDONED en el acto.
+- LOBBY o PLAYING sin nadie conectado: se programa `abandon-idle` a 60 s; si alguien vuelve o se une, se invalida. El margen evita que un redeploy, que corta todos los sockets a la vez, mate las partidas en curso.
+- Si ya nadie puede volver (el lobby quedó sin jugadores, o en PLAYING todos salieron), se abandona en el acto.
+- PROCESSING y REVIEW nunca se abandonan.
 
 ## Pruebas
 
 - `story-game.service.spec.ts`: reglas y máquina de estados, con un repositorio en memoria en lugar de Redis y el reloj controlado.
 - `story-state.repository.spec.ts`: formato de las claves y de los scripts, con el cliente Redis mockeado. Incluye un bloque contra un Redis real que se salta si no hay `REDIS_TEST_URL`.
 - `queue/story-timeout.queue.spec.ts`: id fijo de la tarea, delay y cancelación.
+- `story-game.gateway.spec.ts`: salas personales, partida leída de Redis, `KICKED` y salida de la sala.
 - `dto/story-dtos.spec.ts`: rangos de configuración y payloads a través del pipe del gateway.

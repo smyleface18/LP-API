@@ -17,8 +17,8 @@ export class StoryTimeoutProcessor extends WorkerHost {
     this.logger.debug(`${kind} game=${gameId} seq=${seq} drift=${Date.now() - dueAt}ms`);
 
     switch (kind) {
-      case 'abandon-lobby':
-        await this.storyGameService.abandonIdleLobby(gameId, seq);
+      case 'abandon-idle':
+        await this.storyGameService.abandonIdleGame(gameId, seq);
         return;
       default:
         this.logger.warn(`unknown job: ${job.name}`);

@@ -6,7 +6,7 @@ export const STORY_SCHEDULE_EVENT = 'story.schedule';
 export const STORY_CANCEL_EVENT = 'story.cancel';
 
 /** 'close-turn' se agrega en la Fase 2. */
-export type StoryJobKind = 'abandon-lobby';
+export type StoryJobKind = 'abandon-idle';
 
 /**
  * Paso programado de una partida de Historieta (mismo patrón que GameJob de la
@@ -14,7 +14,7 @@ export type StoryJobKind = 'abandon-lobby';
  * partida ya cambió, la tarea se descarta. `dueAt` es la hora planeada (epoch
  * ms, servidor).
  *
- * - abandon-lobby: seq = `abandonSeq` de la partida.
+ * - abandon-idle: seq = `abandonSeq` de la partida.
  */
 export interface StoryJob {
   gameId: string;

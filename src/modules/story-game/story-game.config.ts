@@ -26,8 +26,12 @@ export const STORY_DEFAULT_CONFIG = {
   language: 'en-US' as StoryLanguage,
 };
 
-/** Cuánto espera un lobby sin nadie conectado antes de pasar a ABANDONED. */
-export const LOBBY_ABANDON_DELAY_MS = 60_000;
+/**
+ * Cuánto espera una partida en LOBBY o PLAYING sin nadie conectado antes de
+ * pasar a ABANDONED. Un redeploy desconecta todos los sockets a la vez: sin
+ * este margen, cada deploy mataría las partidas en curso.
+ */
+export const IDLE_ABANDON_DELAY_MS = 60_000;
 
 /** Revisiones de IA que puede usar un jugador en su viñeta. */
 export const MAX_REVIEW_ATTEMPTS = 2;
