@@ -45,6 +45,18 @@ export class StorageService {
     return getSignedUrl(this.client, command, { expiresIn: UPLOAD_URL_EXPIRES_IN_SECONDS });
   }
 
+  /** Sube un objeto desde el servidor (ej. audio generado con Polly). */
+  async putObject(key: string, body: Uint8Array | string, contentType: string): Promise<void> {
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+      }),
+    );
+  }
+
   /** URL firmada para leer el objeto (bucket privado, sin exponer la URL cruda de S3). */
   async getReadUrl(
     key: string,
