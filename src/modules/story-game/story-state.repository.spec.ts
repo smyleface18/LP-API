@@ -31,7 +31,17 @@ const GAME: StoryGame = {
   status: StoryStatus.LOBBY,
   hostId: 'alice',
   config: { ...STORY_DEFAULT_CONFIG },
-  players: [{ userId: 'alice', username: 'Alice', connected: true, left: false, joinedAt: 1 }],
+  players: [
+    {
+      userId: 'alice',
+      username: 'Alice',
+      connected: true,
+      left: false,
+      joinedAt: 1,
+      totalScore: 0,
+      panelsWritten: 0,
+    },
+  ],
   currentPanel: null,
   turnEndsAt: null,
   turnCloseAt: null,

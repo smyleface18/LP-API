@@ -84,7 +84,15 @@ export class StoryGameService {
         hostId: user.id,
         config: { ...STORY_DEFAULT_CONFIG },
         players: [
-          { userId: user.id, username: user.username, connected: true, left: false, joinedAt: now },
+          {
+            userId: user.id,
+            username: user.username,
+            connected: true,
+            left: false,
+            joinedAt: now,
+            totalScore: 0,
+            panelsWritten: 0,
+          },
         ],
         currentPanel: null,
         turnEndsAt: null,
@@ -136,6 +144,8 @@ export class StoryGameService {
         connected: true,
         left: false,
         joinedAt: Date.now(),
+        totalScore: 0,
+        panelsWritten: 0,
       });
       this.onPlayerConnected(game);
       return { game };

@@ -59,6 +59,19 @@ export const REVIEW_CLOSE_GRACE_MS = 2_000;
 /** Texto de una viñeta cuyo turno venció sin ningún borrador. */
 export const OUT_OF_TIME_TEXT = '(The author ran out of time.)';
 
+/**
+ * Puntuación por viñeta (ver calculatePanelScore). La calcula el servidor a
+ * partir de la cantidad de errores; nunca se usa un puntaje del modelo.
+ */
+/** Cuánto pesa cada error en la precisión: 100 × (1 − peso × errores / palabras). */
+export const SCORE_ERROR_WEIGHT = 3;
+/** 0 errores en la primera revisión. */
+export const SCORE_FIRST_TRY_BONUS = 50;
+/** La segunda revisión tiene menos errores que la primera. */
+export const SCORE_SELF_CORRECTION_BONUS = 25;
+/** Puntaje fijo si la IA no pudo revisar el texto final: no se castiga al jugador. */
+export const SCORE_REVIEW_UNAVAILABLE = 60;
+
 /** Personajes: se crean durante los turnos. */
 export const MAX_CHARACTERS_PER_STORY = 6;
 export const MAX_NEW_CHARACTERS_PER_PANEL = 2;

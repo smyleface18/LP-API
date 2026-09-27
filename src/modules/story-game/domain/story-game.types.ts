@@ -46,6 +46,10 @@ export interface StoryPlayer {
    */
   left: boolean;
   joinedAt: number;
+  /** Suma de los puntajes de sus viñetas. */
+  totalScore: number;
+  /** Viñetas que le tocaron y se cerraron (incluidas las que vencieron sin texto). */
+  panelsWritten: number;
 }
 
 /** Ficha corta: se llena durante un turno con reloj. En inglés. */
@@ -103,7 +107,7 @@ export interface PanelDraft extends DraftInput {
   review: LanguageReview | null;
 }
 
-/** Puntaje de una viñeta (se calcula en la Fase 3; en la Fase 2 solo el caso sin texto). */
+/** Puntaje de una viñeta (ver calculatePanelScore). */
 export interface PanelScore {
   accuracy: number;
   firstTryBonus: number;
@@ -139,6 +143,7 @@ export interface PanelState {
   scene: string | null;
   /** Al confirmar: existentes + nuevos ya creados. */
   characterIds: string[];
+  /** Se calcula al cerrarse; null mientras está abierta. */
   score: PanelScore | null;
   confirmedBy: PanelConfirmedBy | null;
 }

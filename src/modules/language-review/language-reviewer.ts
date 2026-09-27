@@ -13,8 +13,8 @@ export abstract class LanguageReviewer {
 }
 
 /**
- * Revisor falso de la Fase 2: todo texto está bien. Se reemplaza por la
- * implementación con Bedrock en la Fase 3.
+ * Revisor falso: todo texto está bien. Para tests y desarrollo local; en la
+ * app se usa LanguageReviewService (Bedrock).
  */
 @Injectable()
 export class NoErrorsLanguageReviewer extends LanguageReviewer {

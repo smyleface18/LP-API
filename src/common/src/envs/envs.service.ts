@@ -59,6 +59,19 @@ export class EnvsService {
     };
   }
 
+  /** Región de Bedrock para la revisión de inglés. Por defecto, la de AWS_REGION. */
+  get bedrockRegion(): string | undefined {
+    return this.config.get<string>('BEDROCK_REGION') || this.config.get<string>('AWS_REGION');
+  }
+
+  /**
+   * Model ID o inference profile de Amazon Nova 2 Lite (ver el catálogo de
+   * Bedrock). Sin definir, la revisión queda desactivada y el juego sigue sin ella.
+   */
+  get bedrockReviewModelId(): string | undefined {
+    return this.config.get<string>('BEDROCK_REVIEW_MODEL_ID') || undefined;
+  }
+
   // Helpers para evitar valores undefined
   private getString(key: string): string {
     const value = this.config.get<string>(key);

@@ -7,11 +7,14 @@ import {
   OUT_OF_TIME_TEXT,
 } from '../story-game.config';
 import { StoryError } from './story-game.errors';
+import { countWords } from './story-text';
+import { calculatePanelScore } from './story-score';
 import { PanelConfirmedEvent, StoryPanelSummary } from './story-game.events';
 import {
+  CharacterSheet,
   DraftInput,
   PanelConfirmedBy,
-  PanelScore,
+  PanelDraft,
   PanelState,
   StoryCharacter,
   StoryGame,
@@ -22,10 +25,6 @@ import {
  * Reglas de los turnos, como funciones puras sobre el estado leído de Redis.
  * Modifican el snapshot recibido; StoryGameService decide qué se guarda.
  */
-
-export function countWords(text: string): number {
-  return text.trim().split(/\s+/).filter(Boolean).length;
-}
 
 /** Jugadores que no abandonaron (los desconectados cuentan: pueden volver). */
 export function remainingPlayers(game: StoryGame) {
@@ -169,20 +168,28 @@ export function validateDraft(snapshot: StorySnapshot, draft: DraftInput): void 
   }
 }
 
-function zeroScore(): PanelScore {
-  return {
-    accuracy: 0,
-    firstTryBonus: 0,
-    selfCorrectionBonus: 0,
-    timeoutPenalty: true,
-    total: 0,
-  };
+/**
+ * Ficha tal como entra al elenco: con las correcciones de la IA aplicadas,
+ * salvo el nombre (es un nombre propio).
+ */
+function correctedSheet(sheet: CharacterSheet, index: number, draft: PanelDraft): CharacterSheet {
+  const corrected = { ...sheet };
+  for (const correction of draft.review?.characterCorrections ?? []) {
+    if (correction.characterIndex !== index || correction.field === 'name') continue;
+    // Replacer como función: `suggestion` podría traer patrones como `$&`.
+    corrected[correction.field] = corrected[correction.field].replace(
+      correction.original,
+      () => correction.suggestion,
+    );
+  }
+  return corrected;
 }
 
 /**
  * Cierra la viñeta abierta con su último borrador (o con OUT_OF_TIME_TEXT si
- * venció sin ninguno) y agrega al elenco los personajes nuevos de ese
- * borrador. Devuelve el evento `panelConfirmed`.
+ * venció sin ninguno), agrega al elenco los personajes nuevos de ese
+ * borrador, calcula el puntaje y lo suma al autor. Devuelve el evento
+ * `panelConfirmed`.
  */
 export function confirmPanel(
   snapshot: StorySnapshot,
@@ -194,11 +201,12 @@ export function confirmPanel(
 
   if (draft) {
     draft.newCharacters.forEach((sheet, index) => {
+      const { name, kind, description } = correctedSheet(sheet, index, draft);
       const character: StoryCharacter = {
         id: `ch-${panel.order}-${index}`,
-        name: sheet.name,
-        kind: sheet.kind,
-        description: sheet.description,
+        name,
+        kind,
+        description,
         createdBy: panel.authorId,
         introducedInPanel: panel.order,
       };
@@ -210,14 +218,19 @@ export function confirmPanel(
     panel.finalText = draft.review?.correctedText ?? draft.text;
     panel.scene = draft.scene;
     panel.characterIds = [...draft.characterIds, ...newCharacters.map((c) => c.id)];
-    // El puntaje se calcula en la Fase 3.
-    panel.score = null;
   } else {
     panel.originalText = null;
     panel.finalText = OUT_OF_TIME_TEXT;
     panel.scene = '';
     panel.characterIds = [];
-    panel.score = zeroScore();
+  }
+
+  const score = calculatePanelScore(panel.drafts, confirmedBy);
+  panel.score = score;
+  const author = snapshot.game.players.find((player) => player.userId === panel.authorId);
+  if (author) {
+    author.totalScore += score.total;
+    author.panelsWritten += 1;
   }
 
   panel.status = 'closed';
@@ -233,7 +246,7 @@ export function confirmPanel(
     scene: panel.scene ?? '',
     characterIds: panel.characterIds,
     newCharacters,
-    score: panel.score,
+    score,
     confirmedBy,
   };
 }

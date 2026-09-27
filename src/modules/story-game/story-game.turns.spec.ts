@@ -287,6 +287,47 @@ describe('StoryGameService — turns', () => {
       expect(confirmed()[1].characterIds).toEqual(['ch-0-0', 'ch-1-0']);
     });
 
+    it('stores new characters with the AI corrections applied, except the name', async () => {
+      h.reviewer.review.mockResolvedValue({
+        correctedText: TEXT,
+        corrections: [],
+        characterCorrections: [
+          {
+            characterIndex: 0,
+            field: 'name',
+            original: 'Bep',
+            suggestion: 'Beep',
+            explanation: '.',
+          },
+          {
+            characterIndex: 0,
+            field: 'kind',
+            original: 'robbot',
+            suggestion: 'robot',
+            explanation: '.',
+          },
+          {
+            characterIndex: 0,
+            field: 'description',
+            original: 'sliver',
+            suggestion: 'silver',
+            explanation: '.',
+          },
+        ],
+        flagged: false,
+      });
+      const gameId = await h.playingWith('alice', 'bob');
+      await writePanel(gameId, {
+        newCharacters: [{ name: 'Bep', kind: 'robbot', description: 'small sliver robot' }],
+      });
+
+      expect((await h.snapshotOf(gameId)).characters['ch-0-0']).toMatchObject({
+        name: 'Bep',
+        kind: 'robot',
+        description: 'small silver robot',
+      });
+    });
+
     it('accepts a panel with no characters', async () => {
       const gameId = await h.playingWith('alice', 'bob');
       await writePanel(gameId);
@@ -408,6 +449,40 @@ describe('StoryGameService — turns', () => {
         originalText: TEXT,
         finalText: 'The little robot walks slowly into the dark forest tonight.',
       });
+    });
+
+    it('scores the panel on the server and adds it to the author', async () => {
+      // 1 error en 10 palabras → precisión 70; sin bono de primer intento.
+      h.reviewer.review.mockResolvedValue({
+        correctedText: TEXT,
+        corrections: [
+          { original: 'walked', suggestion: 'walks', type: 'grammar', explanation: 'Presente.' },
+        ],
+        characterCorrections: [],
+        flagged: false,
+      });
+      const gameId = await h.playingWith('alice', 'bob');
+      await writePanel(gameId);
+
+      expect(confirmed()[0].score).toEqual({
+        accuracy: 70,
+        firstTryBonus: 0,
+        selfCorrectionBonus: 0,
+        timeoutPenalty: false,
+        total: 70,
+      });
+      expect((await panelOf(gameId, 0)).score?.total).toBe(70);
+      const [alice, bob] = (await h.gameOf(gameId)).players;
+      expect(alice).toMatchObject({ totalScore: 70, panelsWritten: 1 });
+      expect(bob).toMatchObject({ totalScore: 0, panelsWritten: 0 });
+    });
+
+    it('counts a panel that ran out of time as written, with 0 points', async () => {
+      const gameId = await h.playingWith('alice', 'bob');
+      h.clock.now = T0 + TURN_MS;
+      await service.closeTurnByTimeout(gameId, 0, T0 + TURN_MS);
+      const [alice] = (await h.gameOf(gameId)).players;
+      expect(alice).toMatchObject({ totalScore: 0, panelsWritten: 1 });
     });
 
     it('moves to PROCESSING after the last panel', async () => {

@@ -2,7 +2,7 @@
 
 Varios jugadores escriben una historieta en inglés, una viñeta por turno. Los personajes se crean durante los turnos. Este módulo tiene el namespace de Socket.IO `/story`, la máquina de estados, el estado compartido en Redis y las tareas diferidas en BullMQ.
 
-Estado actual: **Fase 2** (lobby, turnos y personajes, con un revisor de inglés falso que no encuentra errores). La revisión con IA y la puntuación (Fase 3), y el audio y el review (Fase 4), llegan en fases siguientes.
+Estado actual: **Fase 3** (lobby, turnos y personajes, revisión de inglés con IA y puntuación). El audio y el review (Fase 4) llegan en la fase siguiente.
 
 ## Archivos
 
@@ -18,7 +18,7 @@ Estado actual: **Fase 2** (lobby, turnos y personajes, con un revisor de inglés
 | `story-validation.pipe.ts`  | `ValidationPipe` del gateway; los errores salen como `VALIDATION_ERROR`.               |
 | `queue/`                    | Cola BullMQ `story-turn-timeout`: tareas diferidas con el patrón `dueAt + seq`.        |
 
-La revisión de inglés la hace `LanguageReviewer` (`src/modules/language-review/`), una clase abstracta que sirve de token de inyección. En la Fase 2 la implementación es `NoErrorsLanguageReviewer`.
+La revisión de inglés la hace `LanguageReviewer` (`src/modules/language-review/`), una clase abstracta que sirve de token de inyección; la implementación es `LanguageReviewService` (Nova 2 Lite en Bedrock). Ver su README.
 
 ## Estados
 
@@ -78,6 +78,29 @@ Los eventos que dispara un timer llegan a todos los jugadores igual que en la tr
 4. **Timeout** (`close-turn`). Si hay borradores, confirma el último (`confirmedBy: 'timeout'`, con sus personajes nuevos). Si no hay ninguno, la viñeta queda con `(The author ran out of time.)` y puntaje 0.
    Si al vencer hay una revisión en curso, no cierra todavía: marca `closeWhenReviewed`, y cuando se guarda el resultado de esa revisión el turno se cierra con ese borrador (`confirmedBy: 'timeout'`). Como respaldo, `close-turn` se reprograma (misma viñeta) para `inicio de la revisión + REVIEW_TIMEOUT_MS + 2 s`; si corre, cierra con lo que haya. Un borrador enviado después de `endsAt` se rechaza (`TURN_EXPIRED`).
 
+## Puntuación
+
+`domain/story-score.ts` → `calculatePanelScore(drafts, confirmedBy)`, una función pura. Se calcula en el servidor al cerrar la viñeta, con la cantidad de errores; nunca con un puntaje del modelo. Las constantes están en `story-game.config.ts`.
+
+```text
+palabras  = palabras del último texto del jugador
+errores   = correcciones de la ÚLTIMA revisión
+precisión = round(100 × max(0, 1 − 3 × errores / palabras))
+```
+
+| Situación                                               | Puntos                      |
+| ------------------------------------------------------- | --------------------------- |
+| Precisión                                               | 0–100                       |
+| 0 errores en la revisión 1                              | +50                         |
+| La revisión 2 tiene menos errores que la 1              | +25                         |
+| Confirmada por timeout                                  | La precisión vale la mitad  |
+| Sin texto (venció sin borradores)                       | 0                           |
+| El último borrador no se pudo revisar (IA no disponible) | 60 fijos                   |
+
+"Revisión n" es el n-ésimo borrador que sí se revisó. El puntaje va en `panelConfirmed` y se suma al autor en Redis (`players[].totalScore` y `players[].panelsWritten`; una viñeta que venció sin texto cuenta como escrita, con 0). El ranking por promedio (`totalScore / panelsWritten`) se arma en el manifiesto de la Fase 4.
+
+Las fichas de personajes nuevos entran al elenco con las `characterCorrections` de la última revisión aplicadas, salvo el nombre. No suman ni restan puntos.
+
 El texto corregido nunca se envía mientras la viñeta está abierta: ni en `panelReviewResult` ni en `gameState`/`getGameState`. Se ve recién cuando la viñeta se confirma (`finalText` de `panelConfirmed`).
 
 Validación del borrador: el DTO valida forma y largos (`MAX_CHARS_PER_PANEL`, `MAX_CHARS_PER_SCENE`, fichas). El servicio valida lo que depende del estado: `MIN_WORDS_PER_PANEL`, que los `characterIds` existan en el elenco, como máximo `MAX_NEW_CHARACTERS_PER_PANEL` nuevos y `MAX_CHARACTERS_PER_PANEL` en total por viñeta (puede no haber ninguno), que el elenco no pase de `MAX_CHARACTERS_PER_STORY` y que los nombres nuevos no se repitan (sin distinguir mayúsculas).
@@ -135,6 +158,7 @@ Códigos de error: `VALIDATION_ERROR`, `USER_NOT_FOUND`, `GAME_NOT_FOUND`, `NOT_
 
 - `story-game.service.spec.ts`: lobby, anfitrión, abandono y reconexión.
 - `story-game.turns.spec.ts`: turnos, borradores, personajes, confirmación, timeout (incluido el cierre exactamente una vez, con y sin lock, y el cierre diferido por una revisión en curso), reasignación y fin anticipado.
+- `domain/story-score.spec.ts`: `calculatePanelScore` (primer intento perfecto, autocorrección, timeout, sin texto, IA caída).
 - `story-game.timers.spec.ts`: una tarea de la cola llega hasta `server.to(gameId).emit` (módulo de Nest real con `EventEmitterModule`).
 - `test/story-game/story-harness.ts`: Redis en memoria (emula el script Lua con guarda), reloj controlado y dependencias falsas, compartido por los dos specs anteriores.
 - `story-state.repository.spec.ts`: formato de las claves y de los scripts, con el cliente Redis mockeado. Incluye un bloque contra un Redis real (scripts Lua y guarda) que se salta si no hay `REDIS_TEST_URL`.

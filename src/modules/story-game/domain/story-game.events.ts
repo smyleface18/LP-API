@@ -45,7 +45,7 @@ export interface PanelConfirmedEvent {
   characterIds: string[];
   /** Personajes que entraron al elenco con esta viñeta. */
   newCharacters: StoryCharacter[];
-  score: PanelScore | null;
+  score: PanelScore;
   confirmedBy: PanelConfirmedBy;
 }
 
