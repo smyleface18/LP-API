@@ -294,4 +294,27 @@ describeWithRedis('StoryStateRepository (real Redis)', () => {
     const keys = await client.keys(`*${guarded}*`);
     await client.del(keys);
   });
+
+  it('applies the TTL of the write to every key of the game', async () => {
+    const finished = `${gameId}-finished`;
+    await repository.create({ ...GAME, gameId: finished });
+    const save = (changes: Parameters<StoryStateRepository['save']>[2]) =>
+      repository.withGameLock(finished, (lock) => repository.save(finished, lock, changes));
+
+    await save({ setPanels: [PANEL], addCharacters: { c1: { name: 'Luna' } as never } });
+    const keys = [
+      StoryStateRepository.gameKey(finished),
+      StoryStateRepository.charactersKey(finished),
+      StoryStateRepository.panelsKey(finished),
+    ];
+    for (const key of keys) expect(await client.pTTL(key)).toBeLessThanOrEqual(60_000);
+
+    await save({
+      game: { ...GAME, gameId: finished, status: StoryStatus.FINISHED },
+      ttlMs: 86_400_000,
+    });
+    for (const key of keys) expect(await client.pTTL(key)).toBeGreaterThan(60_000);
+
+    await client.del(await client.keys(`*${finished}*`));
+  });
 });
