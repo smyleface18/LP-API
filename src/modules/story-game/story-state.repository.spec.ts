@@ -1,9 +1,28 @@
 import { EnvsService } from '@/common/src/envs/envs.service';
 import { RedisLockService } from '@/common/src/redis/redis-lock.service';
 import { RedisClient } from '@/common/src/redis/redis.token';
-import { StoryLockLostError, StoryStateRepository } from './story-state.repository';
-import { StoryGame, StoryStatus } from './domain/story-game.types';
+import {
+  PanelGuardError,
+  StoryLockLostError,
+  StoryStateRepository,
+} from './story-state.repository';
+import { PanelState, StoryGame, StoryStatus } from './domain/story-game.types';
 import { STORY_DEFAULT_CONFIG } from './story-game.config';
+
+const PANEL: PanelState = {
+  order: 0,
+  authorId: 'alice',
+  status: 'open',
+  attempts: 0,
+  drafts: [],
+  reviewing: null,
+  originalText: null,
+  finalText: null,
+  scene: null,
+  characterIds: [],
+  score: null,
+  confirmedBy: null,
+};
 
 const GAME: StoryGame = {
   gameId: 'brave-red-fox',
@@ -85,13 +104,16 @@ describe('StoryStateRepository (mocked Redis)', () => {
       Promise.resolve(
         key.endsWith(':characters')
           ? { c1: JSON.stringify({ name: 'Luna' }) }
-          : Object.fromEntries(gameOps.set),
+          : key.endsWith(':panels')
+            ? { '0': JSON.stringify(PANEL) }
+            : Object.fromEntries(gameOps.set),
       ),
     );
 
     expect(await repository.get(GAME.gameId)).toEqual({
       game: playing,
       characters: { c1: { name: 'Luna' } },
+      panels: { 0: PANEL },
     });
   });
 
@@ -135,6 +157,30 @@ describe('StoryStateRepository (mocked Redis)', () => {
     await expect(
       repository.save(GAME.gameId, { key: 'lock', token: 'tok' }, { game: GAME }),
     ).rejects.toBeInstanceOf(StoryLockLostError);
+  });
+
+  it('writes and deletes panels by order', async () => {
+    redis.eval.mockResolvedValue(1);
+    await repository.save(
+      GAME.gameId,
+      { key: 'lock', token: 'tok' },
+      { setPanels: [PANEL], deletePanels: [3] },
+    );
+    const [, , panelOps] = JSON.parse(evalOptions().arguments[2]) as unknown[];
+    expect(panelOps).toEqual({ set: [['0', JSON.stringify(PANEL)]], del: ['3'] });
+    expect(evalOptions().arguments[3]).toBe('');
+  });
+
+  it('sends the panel guard and reports when Redis rejects it', async () => {
+    redis.eval.mockResolvedValue(-1);
+    await expect(
+      repository.save(
+        GAME.gameId,
+        { key: 'lock', token: 'tok' },
+        { setPanels: [PANEL], guard: { order: 0, attemptId: 'a1' } },
+      ),
+    ).rejects.toBeInstanceOf(PanelGuardError);
+    expect(JSON.parse(evalOptions().arguments[3])).toEqual({ order: 0, attemptId: 'a1' });
   });
 });
 
@@ -200,5 +246,29 @@ describeWithRedis('StoryStateRepository (real Redis)', () => {
     expect(cleared?.game.abandonAt).toBeNull();
     // El elenco solo crece.
     expect(cleared?.characters).toEqual({ c1: { name: 'Luna' } });
+  });
+
+  it('applies the panel guard atomically', async () => {
+    const guarded = `${gameId}-guard`;
+    await repository.create({ ...GAME, gameId: guarded });
+    const save = (changes: Parameters<StoryStateRepository['save']>[2]) =>
+      repository.withGameLock(guarded, (lock) => repository.save(guarded, lock, changes));
+
+    await save({ setPanels: [{ ...PANEL, reviewing: { attemptId: 'a1', startedAt: 1 } }] });
+    // Revisión distinta a la en curso: rechazada.
+    await expect(
+      save({ setPanels: [PANEL], guard: { order: 0, attemptId: 'zz' } }),
+    ).rejects.toBeInstanceOf(PanelGuardError);
+    // Cierre con la viñeta abierta: pasa una vez; el segundo cierre se rechaza.
+    const closed = { ...PANEL, status: 'closed' as const };
+    await save({ setPanels: [closed], guard: { order: 0 } });
+    await expect(save({ setPanels: [closed], guard: { order: 0 } })).rejects.toBeInstanceOf(
+      PanelGuardError,
+    );
+    // Viñeta inexistente: rechazada.
+    await expect(save({ guard: { order: 5 } })).rejects.toBeInstanceOf(PanelGuardError);
+
+    const keys = await client.keys(`*${guarded}*`);
+    await client.del(keys);
   });
 });

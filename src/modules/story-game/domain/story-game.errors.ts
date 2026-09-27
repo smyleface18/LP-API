@@ -13,6 +13,16 @@ export type StoryErrorCode =
   | 'NOT_ENOUGH_PLAYERS'
   | 'NOT_ENOUGH_PANELS'
   | 'CANNOT_KICK_SELF'
+  | 'NOT_YOUR_TURN'
+  | 'TURN_CLOSED'
+  | 'TURN_EXPIRED'
+  | 'REVIEW_IN_PROGRESS'
+  | 'NO_ATTEMPTS_LEFT'
+  | 'NO_DRAFT'
+  | 'INVALID_DRAFT'
+  | 'UNKNOWN_CHARACTER'
+  | 'TOO_MANY_CHARACTERS'
+  | 'DUPLICATE_CHARACTER_NAME'
   /** Se envía al jugador expulsado por el anfitrión. */
   | 'KICKED';
 
@@ -51,5 +61,9 @@ export class StoryError extends HttpException {
       `Cannot ${action} while the game is ${status}`,
       HttpStatus.CONFLICT,
     );
+  }
+
+  static turnClosed(order: number) {
+    return new StoryError('TURN_CLOSED', `Panel ${order} is no longer open`, HttpStatus.CONFLICT);
   }
 }

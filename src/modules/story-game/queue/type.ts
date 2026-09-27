@@ -5,8 +5,7 @@ export const STORY_SCHEDULE_EVENT = 'story.schedule';
 /** Borrar una tarea que quedó obsoleta. Solo limpieza: la tarea igual se descarta sola por `seq`. */
 export const STORY_CANCEL_EVENT = 'story.cancel';
 
-/** 'close-turn' se agrega en la Fase 2. */
-export type StoryJobKind = 'abandon-idle';
+export type StoryJobKind = 'abandon-idle' | 'close-turn';
 
 /**
  * Paso programado de una partida de Historieta (mismo patrón que GameJob de la
@@ -15,6 +14,8 @@ export type StoryJobKind = 'abandon-idle';
  * ms, servidor).
  *
  * - abandon-idle: seq = `abandonSeq` de la partida.
+ * - close-turn: seq = número de viñeta; dueAt = `turnEndsAt` del turno. Si la
+ *   viñeta se reasignó (su autor abandonó), el turno nuevo tiene otro dueAt.
  */
 export interface StoryJob {
   gameId: string;

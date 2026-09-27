@@ -1,12 +1,22 @@
+import { randomUUID } from 'crypto';
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '@/db/entities';
 import { UniqueNamesAdapter } from '@/common/src/unique-names/unique-names.adapter';
-import { StoryChanges, StoryStateRepository } from './story-state.repository';
-import { StoryError } from './domain/story-game.errors';
+import { LanguageReviewer } from '@/modules/language-review/language-reviewer';
 import {
+  LanguageReview,
+  LanguageReviewInput,
+} from '@/modules/language-review/language-review.types';
+import { PanelGuardError, StoryChanges, StoryStateRepository } from './story-state.repository';
+import { StoryError } from './domain/story-game.errors';
+import { STORY_EVENTS, StoryOutboxItem } from './domain/story-game.events';
+import {
+  DraftInput,
+  PanelConfirmedBy,
+  PanelState,
   STORY_ABANDONABLE_STATUSES,
   STORY_ENDED_STATUSES,
   StoryConfig,
@@ -15,20 +25,36 @@ import {
   StoryStatus,
 } from './domain/story-game.types';
 import {
+  authorFor,
+  castOf,
+  closedPanels,
+  confirmPanel,
+  nextAuthorAfter,
+  openTurn,
+  remainingPlayers,
+  storySoFar,
+  validateDraft,
+} from './domain/story-turns';
+import { GameStateView, PanelReviewResultView, toGameStateView } from './domain/story-game.views';
+import {
   IDLE_ABANDON_DELAY_MS,
+  MAX_REVIEW_ATTEMPTS,
+  REVIEW_STALE_MS,
   STORY_DEFAULT_CONFIG,
   STORY_MAX_PLAYERS,
   STORY_MIN_PLAYERS,
 } from './story-game.config';
-import { STORY_CANCEL_EVENT, STORY_SCHEDULE_EVENT, StoryJob } from './queue/type';
+import { STORY_CANCEL_EVENT, STORY_SCHEDULE_EVENT, StoryJob, storyJobId } from './queue/type';
 
 const MAX_GAME_ID_ATTEMPTS = 5;
+
+type Mutation = (snapshot: StorySnapshot, outbox: StoryOutboxItem[]) => StoryChanges | null;
 
 /**
  * Máquina de estados y reglas del modo Historieta. Todo cambio de estado pasa
  * por `mutate`: lock de la partida → leer → validar/modificar → escritura
- * atómica con fencing → programar/cancelar tareas diferidas. El gateway solo
- * traduce eventos y difunde el resultado.
+ * atómica con fencing → programar/cancelar tareas diferidas → publicar
+ * eventos. El gateway traduce eventos y difunde el resultado.
  */
 @Injectable()
 export class StoryGameService {
@@ -40,6 +66,7 @@ export class StoryGameService {
     private readonly users: Repository<User>,
     private readonly uniqueNames: UniqueNamesAdapter,
     private readonly eventEmitter: EventEmitter2,
+    private readonly reviewer: LanguageReviewer,
   ) {}
 
   async createGame(userId: string): Promise<StorySnapshot> {
@@ -66,7 +93,7 @@ export class StoryGameService {
       // create() no pisa una partida existente con el mismo id.
       if (await this.store.create(game)) {
         await this.store.setUserGame(user.id, game.gameId);
-        return { game, characters: {} };
+        return { game, characters: {}, panels: {} };
       }
     }
 
@@ -153,9 +180,10 @@ export class StoryGameService {
     return snapshot;
   }
 
-  /** LOBBY → PLAYING (solo anfitrión). La apertura del primer turno llega en la Fase 2. */
+  /** LOBBY → PLAYING (solo anfitrión) y abre el turno de la primera viñeta. */
   async startStory(gameId: string, userId: string): Promise<StorySnapshot> {
-    return this.mutate(gameId, ({ game }) => {
+    return this.mutate(gameId, (snapshot, outbox) => {
+      const { game } = snapshot;
       this.assertHost(game, userId);
       if (game.status !== StoryStatus.LOBBY) {
         throw StoryError.invalidState('start the story', game.status);
@@ -179,29 +207,167 @@ export class StoryGameService {
       }
 
       game.status = StoryStatus.PLAYING;
-      game.currentPanel = 0;
-      return { game };
+      outbox.push({ event: STORY_EVENTS.stateChanged, payload: { snapshot } });
+      const panel = this.startTurn(snapshot, 0, authorFor(game, 0), Date.now(), outbox);
+      return { game, setPanels: [panel] };
     });
   }
 
   /**
+   * Borrador del autor del turno. Tres pasos, para no tener el lock tomado
+   * mientras se espera a la IA:
+   *   a) con lock: valida y marca la viñeta como "en revisión" (attemptId);
+   *   b) sin lock: revisa el inglés;
+   *   c) con lock: guarda el resultado solo si la viñeta sigue abierta y la
+   *      revisión en curso sigue siendo esta (Redis lo verifica en el script).
+   * Solo una revisión exitosa y no flagged consume intento.
+   */
+  async submitPanelDraft(
+    gameId: string,
+    userId: string,
+    panelOrder: number,
+    draft: DraftInput,
+  ): Promise<PanelReviewResultView> {
+    const attemptId = randomUUID();
+    let reviewInput: LanguageReviewInput | undefined;
+
+    await this.mutate(gameId, (snapshot) => {
+      const panel = this.assertAuthorTurn(snapshot, userId, panelOrder);
+      const now = Date.now();
+      if (snapshot.game.turnEndsAt !== null && now > snapshot.game.turnEndsAt) {
+        throw new StoryError(
+          'TURN_EXPIRED',
+          'The time for this panel is over',
+          HttpStatus.CONFLICT,
+        );
+      }
+      this.assertNotReviewing(panel, now);
+      if (panel.attempts >= MAX_REVIEW_ATTEMPTS) {
+        throw new StoryError(
+          'NO_ATTEMPTS_LEFT',
+          `You already used your ${MAX_REVIEW_ATTEMPTS} reviews; confirm your panel`,
+          HttpStatus.CONFLICT,
+        );
+      }
+      validateDraft(snapshot, draft);
+
+      panel.reviewing = { attemptId, startedAt: now };
+      reviewInput = {
+        text: draft.text,
+        scene: draft.scene,
+        level: snapshot.game.config.level,
+        storySoFar: storySoFar(snapshot).map((summary) => summary.finalText),
+        cast: castOf(snapshot).map(({ name, kind, description }) => ({ name, kind, description })),
+        newCharacters: draft.newCharacters,
+      };
+      return { setPanels: [panel], guard: { order: panelOrder } };
+    });
+
+    const review = await this.reviewSafely(reviewInput!);
+
+    let result: PanelReviewResultView | undefined;
+    await this.mutate(gameId, (snapshot) => {
+      const panel = snapshot.panels[panelOrder];
+      if (
+        snapshot.game.status !== StoryStatus.PLAYING ||
+        panel?.status !== 'open' ||
+        panel.reviewing?.attemptId !== attemptId
+      ) {
+        // El turno se cerró (timeout, reasignación, fin anticipado) mientras se revisaba.
+        throw StoryError.turnClosed(panelOrder);
+      }
+
+      panel.reviewing = null;
+      if (review?.flagged) {
+        result = this.reviewResult(panel, review, {
+          message: 'This text is not appropriate for the story. Please rewrite it.',
+        });
+      } else {
+        panel.drafts.push({ ...draft, review });
+        if (review) panel.attempts += 1;
+        result = this.reviewResult(panel, review);
+      }
+      return { setPanels: [panel], guard: { order: panelOrder, attemptId } };
+    });
+
+    return result!;
+  }
+
+  /** El autor confirma su último borrador: cierra la viñeta y abre el siguiente turno. */
+  async confirmPanel(gameId: string, userId: string, panelOrder: number): Promise<void> {
+    await this.mutate(gameId, (snapshot, outbox) => {
+      const panel = this.assertAuthorTurn(snapshot, userId, panelOrder);
+      const now = Date.now();
+      this.assertNotReviewing(panel, now);
+      if (panel.drafts.length === 0) {
+        throw new StoryError('NO_DRAFT', 'Send a draft before confirming', HttpStatus.CONFLICT);
+      }
+      return this.closeTurn(snapshot, panel, 'player', outbox, now);
+    });
+  }
+
+  /**
+   * Tarea diferida `close-turn`: venció el turno de la viñeta `seq`. Si ya se
+   * cerró (confirmación), se reasignó (otro dueAt) o la partida cambió, la
+   * tarea está obsoleta y no hace nada.
+   */
+  async closeTurnByTimeout(gameId: string, seq: number, dueAt: number): Promise<void> {
+    try {
+      await this.mutate(gameId, (snapshot, outbox) => {
+        const { game } = snapshot;
+        const panel = snapshot.panels[seq];
+        if (
+          game.status !== StoryStatus.PLAYING ||
+          game.currentPanel !== seq ||
+          game.turnEndsAt !== dueAt ||
+          panel?.status !== 'open'
+        ) {
+          return null;
+        }
+        return this.closeTurn(snapshot, panel, 'timeout', outbox, Date.now());
+      });
+    } catch (error) {
+      if (error instanceof StoryError && ['GAME_NOT_FOUND', 'TURN_CLOSED'].includes(error.code)) {
+        return;
+      }
+      throw error;
+    }
+  }
+
+  /** Estado completo de la partida tal como lo ve este jugador (reconexión). */
+  async getGameState(userId: string): Promise<GameStateView> {
+    const gameId = await this.store.getUserGame(userId);
+    if (!gameId) throw new StoryError('NOT_IN_GAME', 'Join a story game first');
+    const snapshot = await this.getSnapshot(gameId);
+    this.assertActivePlayer(snapshot.game, userId);
+    return toGameStateView(snapshot, userId);
+  }
+
+  /**
    * Salir de la partida. En LOBBY el jugador se quita de la lista; después se
-   * marca `left` y se queda, porque el orden define los turnos.
+   * marca `left` y se queda, porque el orden define los turnos. En PLAYING, si
+   * era el autor del turno, la viñeta pasa de inmediato al siguiente; si quedan
+   * menos de 2 jugadores, la partida termina con las viñetas confirmadas.
    */
   async leaveGame(gameId: string, userId: string): Promise<StorySnapshot> {
-    const snapshot = await this.mutate(gameId, ({ game }) => {
+    const snapshot = await this.mutate(gameId, (snapshot, outbox) => {
+      const { game } = snapshot;
       if (STORY_ENDED_STATUSES.includes(game.status)) return null;
       const player = this.assertActivePlayer(game, userId);
 
       this.handOverHost(game, userId);
+      const changes: StoryChanges = { game };
       if (game.status === StoryStatus.LOBBY) {
         game.players = game.players.filter((other) => other.userId !== userId);
       } else {
         player.left = true;
         player.connected = false;
       }
+      if (game.status === StoryStatus.PLAYING) {
+        Object.assign(changes, this.afterPlayerLeftTurns(snapshot, userId, outbox));
+      }
       this.onPlayerGone(game);
-      return { game };
+      return changes;
     });
 
     await this.store.clearUserGame(userId, gameId);
@@ -210,7 +376,8 @@ export class StoryGameService {
 
   /**
    * El socket se cortó: el jugador queda desconectado (no "se fue") y puede
-   * volver con `resume`. Si era anfitrión, pasa al siguiente conectado.
+   * volver con `resume`. Si era anfitrión, pasa al siguiente conectado. Si era
+   * el autor del turno, el turno sigue corriendo.
    */
   async disconnect(gameId: string, userId: string): Promise<StorySnapshot | null> {
     let changed = false;
@@ -264,13 +431,15 @@ export class StoryGameService {
    */
   async abandonIdleGame(gameId: string, seq: number): Promise<void> {
     try {
-      await this.mutate(gameId, ({ game }) => {
+      await this.mutate(gameId, (snapshot, outbox) => {
+        const { game } = snapshot;
         if (!STORY_ABANDONABLE_STATUSES.includes(game.status)) return null;
         if (game.abandonAt === null || game.abandonSeq !== seq) return null;
         if (game.players.some((player) => player.connected && !player.left)) return null;
 
         game.status = StoryStatus.ABANDONED;
         game.abandonAt = null;
+        outbox.push({ event: STORY_EVENTS.stateChanged, payload: { snapshot } });
         this.logger.log(`story ${gameId} abandoned (nobody came back)`);
         return { game };
       });
@@ -295,50 +464,247 @@ export class StoryGameService {
   }
 
   /**
-   * Lock → leer → `fn` valida y modifica la copia leída → escritura atómica →
-   * sincronizar tareas diferidas. `fn` devuelve los cambios a guardar, o null
-   * si no hay nada que guardar.
+   * Lock → leer → `fn` valida y modifica la copia leída (y declara qué guardar)
+   * → escritura atómica → sincronizar tareas diferidas → publicar los eventos
+   * que `fn` dejó en el outbox. `fn` devuelve null si no hay nada que guardar.
    */
-  private async mutate(
-    gameId: string,
-    fn: (snapshot: StorySnapshot) => StoryChanges | null,
-  ): Promise<StorySnapshot> {
-    const { previous, next } = await this.store.withGameLock(gameId, async (lock) => {
+  private async mutate(gameId: string, fn: Mutation): Promise<StorySnapshot> {
+    const outbox: StoryOutboxItem[] = [];
+    const { previous, snapshot } = await this.store.withGameLock(gameId, async (lock) => {
       const snapshot = await this.getSnapshot(gameId);
       const previous = structuredClone(snapshot.game);
-      const changes = fn(snapshot);
-      if (!changes) return { previous, next: snapshot };
+      const changes = fn(snapshot, outbox);
+      if (!changes) return { previous, snapshot };
 
-      await this.store.save(gameId, lock, changes);
-      const next: StorySnapshot = {
-        game: changes.game ?? snapshot.game,
-        characters: { ...snapshot.characters, ...changes.addCharacters },
-      };
-      return { previous, next };
+      try {
+        await this.store.save(gameId, lock, changes);
+      } catch (error) {
+        if (error instanceof PanelGuardError) throw StoryError.turnClosed(changes.guard!.order);
+        throw error;
+      }
+      return { previous, snapshot };
     });
 
-    await this.syncAbandonTimer(previous, next.game);
-    return next;
+    await this.syncTimers(previous, snapshot.game);
+    for (const item of outbox) this.eventEmitter.emit(item.event, item.payload);
+    return snapshot;
   }
 
-  /** Programa la tarea de abandono si la partida quedó vacía y borra la anterior si ya no vale. */
-  private async syncAbandonTimer(previous: StoryGame, next: StoryGame) {
-    const job = (game: StoryGame): StoryJob | null =>
-      game.abandonAt === null
-        ? null
-        : {
-            gameId: game.gameId,
-            kind: 'abandon-idle',
-            seq: game.abandonSeq,
-            dueAt: game.abandonAt,
-          };
-    const before = job(previous);
-    const after = job(next);
-    if (before?.seq === after?.seq && before?.dueAt === after?.dueAt) return;
+  /** Tareas diferidas que corresponden a un estado de la partida. */
+  private jobsOf(game: StoryGame): StoryJob[] {
+    const jobs: StoryJob[] = [];
+    if (game.abandonAt !== null) {
+      jobs.push({
+        gameId: game.gameId,
+        kind: 'abandon-idle',
+        seq: game.abandonSeq,
+        dueAt: game.abandonAt,
+      });
+    }
+    if (
+      game.status === StoryStatus.PLAYING &&
+      game.currentPanel !== null &&
+      game.turnEndsAt !== null
+    ) {
+      jobs.push({
+        gameId: game.gameId,
+        kind: 'close-turn',
+        seq: game.currentPanel,
+        dueAt: game.turnEndsAt,
+      });
+    }
+    return jobs;
+  }
 
-    if (before) this.eventEmitter.emit(STORY_CANCEL_EVENT, before);
-    // emitAsync espera al listener: si no se puede programar, el error sube.
-    if (after) await this.eventEmitter.emitAsync(STORY_SCHEDULE_EVENT, after);
+  /**
+   * Programa las tareas nuevas y borra las que quedaron obsoletas. Borrar es
+   * solo limpieza: la garantía es que cada tarea se valida con su `seq`/`dueAt`.
+   */
+  private async syncTimers(previous: StoryGame, next: StoryGame) {
+    const before = this.jobsOf(previous);
+    const after = this.jobsOf(next);
+    const beforeIds = new Set(before.map(storyJobId));
+    const afterIds = new Set(after.map(storyJobId));
+
+    for (const job of before) {
+      if (!afterIds.has(storyJobId(job))) this.eventEmitter.emit(STORY_CANCEL_EVENT, job);
+    }
+    for (const job of after) {
+      // emitAsync espera al listener: si no se puede programar, el error sube.
+      if (!beforeIds.has(storyJobId(job))) {
+        await this.eventEmitter.emitAsync(STORY_SCHEDULE_EVENT, job);
+      }
+    }
+  }
+
+  /** Abre el turno de `order` para `authorId` y deja `turnStarted` en el outbox. */
+  private startTurn(
+    snapshot: StorySnapshot,
+    order: number,
+    authorId: string,
+    now: number,
+    outbox: StoryOutboxItem[],
+  ): PanelState {
+    const panel = openTurn(snapshot, order, authorId, now);
+    outbox.push({
+      event: STORY_EVENTS.turnStarted,
+      payload: {
+        gameId: snapshot.game.gameId,
+        panelOrder: order,
+        authorId,
+        endsAt: snapshot.game.turnEndsAt!,
+        storySoFar: storySoFar(snapshot),
+        cast: castOf(snapshot),
+      },
+    });
+    return panel;
+  }
+
+  /**
+   * Cierra la viñeta abierta (confirmación o timeout) y avanza: abre el
+   * siguiente turno o, si era la última, pasa a PROCESSING. La guarda hace que
+   * Redis rechace el cierre si la viñeta ya no estaba abierta.
+   */
+  private closeTurn(
+    snapshot: StorySnapshot,
+    panel: PanelState,
+    confirmedBy: PanelConfirmedBy,
+    outbox: StoryOutboxItem[],
+    now: number,
+  ): StoryChanges {
+    const { game } = snapshot;
+    const confirmed = confirmPanel(snapshot, panel, confirmedBy);
+    outbox.push({ event: STORY_EVENTS.panelConfirmed, payload: confirmed });
+
+    const changes: StoryChanges = {
+      game,
+      setPanels: [panel],
+      addCharacters: Object.fromEntries(confirmed.newCharacters.map((c) => [c.id, c])),
+      guard: { order: panel.order },
+    };
+
+    const next = panel.order + 1;
+    if (next >= game.config.panelsCount) {
+      this.startProcessing(snapshot, outbox);
+    } else {
+      changes.setPanels!.push(this.startTurn(snapshot, next, authorFor(game, next), now, outbox));
+    }
+    return changes;
+  }
+
+  /**
+   * Un jugador abandonó en PLAYING. Con menos de 2 jugadores sin abandonar, la
+   * partida termina con las viñetas ya confirmadas. Si no, y era el autor del
+   * turno, la viñeta se reasigna de inmediato al siguiente (con turno nuevo).
+   */
+  private afterPlayerLeftTurns(
+    snapshot: StorySnapshot,
+    userId: string,
+    outbox: StoryOutboxItem[],
+  ): StoryChanges {
+    const { game } = snapshot;
+    const current = game.currentPanel === null ? undefined : snapshot.panels[game.currentPanel];
+
+    if (remainingPlayers(game).length < STORY_MIN_PLAYERS) {
+      const changes: StoryChanges = {};
+      if (current?.status === 'open') {
+        delete snapshot.panels[current.order];
+        changes.deletePanels = [current.order];
+      }
+      this.startProcessing(snapshot, outbox);
+      return changes;
+    }
+
+    if (current?.status === 'open' && current.authorId === userId) {
+      const leaverIndex = game.players.findIndex((player) => player.userId === userId);
+      const reopened = this.startTurn(
+        snapshot,
+        current.order,
+        nextAuthorAfter(game, leaverIndex),
+        Date.now(),
+        outbox,
+      );
+      return { setPanels: [reopened], guard: { order: current.order } };
+    }
+    return {};
+  }
+
+  /**
+   * Fin de los turnos: PROCESSING con las viñetas confirmadas (la generación
+   * de media llega en la Fase 4). Sin ninguna viñeta confirmada no hay nada que
+   * generar y la partida se abandona.
+   */
+  private startProcessing(snapshot: StorySnapshot, outbox: StoryOutboxItem[]) {
+    const { game } = snapshot;
+    game.currentPanel = null;
+    game.turnEndsAt = null;
+    game.abandonAt = null;
+
+    if (closedPanels(snapshot).length === 0) {
+      game.status = StoryStatus.ABANDONED;
+      this.logger.log(`story ${game.gameId} abandoned (no confirmed panels)`);
+    } else {
+      game.status = StoryStatus.PROCESSING;
+      outbox.push({ event: STORY_EVENTS.processingStarted, payload: { gameId: game.gameId } });
+    }
+    outbox.push({ event: STORY_EVENTS.stateChanged, payload: { snapshot } });
+  }
+
+  /** La IA nunca bloquea la partida: cualquier fallo es "sin revisión". */
+  private async reviewSafely(input: LanguageReviewInput): Promise<LanguageReview | null> {
+    try {
+      return await this.reviewer.review(input);
+    } catch (error) {
+      this.logger.warn(`language review failed: ${(error as Error).message}`);
+      return null;
+    }
+  }
+
+  private reviewResult(
+    panel: PanelState,
+    review: LanguageReview | null,
+    { message }: { message?: string } = {},
+  ): PanelReviewResultView {
+    return {
+      panelOrder: panel.order,
+      flagged: review?.flagged ?? false,
+      reviewAvailable: review !== null,
+      corrections: review?.flagged ? [] : (review?.corrections ?? []),
+      characterCorrections: review?.flagged ? [] : (review?.characterCorrections ?? []),
+      attemptsLeft: MAX_REVIEW_ATTEMPTS - panel.attempts,
+      ...(message ? { message } : {}),
+    };
+  }
+
+  /** El turno en curso es `panelOrder`, está abierto y `userId` es su autor. */
+  private assertAuthorTurn(
+    snapshot: StorySnapshot,
+    userId: string,
+    panelOrder: number,
+  ): PanelState {
+    const { game } = snapshot;
+    if (game.status !== StoryStatus.PLAYING) {
+      throw StoryError.invalidState('write a panel', game.status);
+    }
+    const panel = snapshot.panels[panelOrder];
+    if (game.currentPanel !== panelOrder || panel?.status !== 'open') {
+      throw StoryError.turnClosed(panelOrder);
+    }
+    if (panel.authorId !== userId) {
+      throw new StoryError('NOT_YOUR_TURN', 'It is not your turn', HttpStatus.FORBIDDEN);
+    }
+    return panel;
+  }
+
+  /** Una revisión en curso bloquea otro borrador o confirmar, salvo que se haya perdido. */
+  private assertNotReviewing(panel: PanelState, now: number) {
+    if (panel.reviewing && now - panel.reviewing.startedAt < REVIEW_STALE_MS) {
+      throw new StoryError(
+        'REVIEW_IN_PROGRESS',
+        'Your previous draft is still being reviewed',
+        HttpStatus.CONFLICT,
+      );
+    }
   }
 
   /** Alguien (re)conectó: la partida deja de estar vacía y el anfitrión tiene que estar conectado. */

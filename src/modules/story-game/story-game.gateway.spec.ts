@@ -6,6 +6,7 @@ import { StoryError } from './domain/story-game.errors';
 import { StorySnapshot, StoryStatus } from './domain/story-game.types';
 import { STORY_DEFAULT_CONFIG } from './story-game.config';
 import { StorySocket } from './types';
+import { SubmitPanelDraftDto } from './dto/submit-panel-draft.dto';
 
 const snapshot = (gameId = 'g1'): StorySnapshot => ({
   game: {
@@ -21,7 +22,17 @@ const snapshot = (gameId = 'g1'): StorySnapshot => ({
     createdAt: 1,
   },
   characters: {},
+  panels: {},
 });
+
+const REVIEW_RESULT = {
+  panelOrder: 0,
+  flagged: false,
+  reviewAvailable: true,
+  corrections: [],
+  characterCorrections: [],
+  attemptsLeft: 1,
+};
 
 /** Server de Socket.IO falso: registra `to(room).emit` e `in(room).socketsJoin/Leave`. */
 function fakeServer() {
@@ -51,6 +62,8 @@ describe('StoryGameGateway', () => {
       | 'disconnect'
       | 'resume'
       | 'getActiveGameId'
+      | 'submitPanelDraft'
+      | 'confirmPanel'
     >
   >;
   let auth: { authenticateSocket: jest.Mock };
@@ -68,6 +81,8 @@ describe('StoryGameGateway', () => {
       disconnect: jest.fn().mockResolvedValue(null),
       resume: jest.fn().mockResolvedValue(null),
       getActiveGameId: jest.fn().mockResolvedValue('g1'),
+      submitPanelDraft: jest.fn().mockResolvedValue(REVIEW_RESULT),
+      confirmPanel: jest.fn().mockResolvedValue(undefined),
     };
     auth = { authenticateSocket: jest.fn().mockResolvedValue({ username: 'alice' }) };
     gateway = new StoryGameGateway(
@@ -148,5 +163,56 @@ describe('StoryGameGateway', () => {
     service.getActiveGameId.mockResolvedValue(null);
     await gateway.handleDisconnect(client('alice'));
     expect(service.disconnect).not.toHaveBeenCalled();
+  });
+
+  it('sends the review result only to the author, on all their sockets', async () => {
+    const dto = Object.assign(new SubmitPanelDraftDto(), {
+      panelOrder: 0,
+      text: 'The robot walked into the forest at night.',
+      scene: 'Forest',
+      characterIds: [],
+      newCharacters: [{ name: 'Beep', kind: 'robot', description: 'tiny' }],
+    });
+    const ack = await gateway.handleSubmitDraft(dto, client('alice'));
+
+    expect(service.submitPanelDraft).toHaveBeenCalledWith('g1', 'alice', 0, {
+      text: dto.text,
+      scene: 'Forest',
+      characterIds: [],
+      newCharacters: [{ name: 'Beep', kind: 'robot', description: 'tiny' }],
+    });
+    expect(io.emitted).toEqual([['user:alice', 'panelReviewResult', REVIEW_RESULT]]);
+    expect(ack.data).toEqual(REVIEW_RESULT);
+  });
+
+  it('confirms the panel the client names', async () => {
+    await gateway.handleConfirmPanel({ panelOrder: 2 }, client('alice'));
+    expect(service.confirmPanel).toHaveBeenCalledWith('g1', 'alice', 2);
+  });
+
+  it('relays turn events from any instance to the game room', () => {
+    gateway.onTurnStarted({
+      gameId: 'g1',
+      panelOrder: 1,
+      authorId: 'bob',
+      endsAt: 5,
+      storySoFar: [],
+      cast: [],
+    });
+    expect(io.emitted).toEqual([
+      [
+        'g1',
+        'turnStarted',
+        { panelOrder: 1, authorId: 'bob', endsAt: 5, storySoFar: [], cast: [] },
+      ],
+    ]);
+  });
+
+  it('sends the full game state to a reconnecting player', async () => {
+    service.resume.mockResolvedValue(snapshot());
+    const emit = jest.fn();
+    const socket = { ...client('alice'), emit } as unknown as StorySocket;
+    await gateway.handleConnection(socket);
+    expect(emit).toHaveBeenCalledWith('gameState', expect.objectContaining({ turn: null }));
   });
 });

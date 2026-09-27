@@ -20,6 +20,9 @@ export class StoryTimeoutProcessor extends WorkerHost {
       case 'abandon-idle':
         await this.storyGameService.abandonIdleGame(gameId, seq);
         return;
+      case 'close-turn':
+        await this.storyGameService.closeTurnByTimeout(gameId, seq, dueAt);
+        return;
       default:
         this.logger.warn(`unknown job: ${job.name}`);
     }

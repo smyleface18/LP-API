@@ -8,6 +8,7 @@ import {
   WebSocketServer,
 } from '@nestjs/websockets';
 import { HttpStatus, Logger, UseFilters, UsePipes } from '@nestjs/common';
+import { OnEvent } from '@nestjs/event-emitter';
 import { Server } from 'socket.io';
 import { ApiResponse } from '@/common/src/api/api.type';
 import { WsHttpExceptionFilter } from '@/common/src/api/ws-exception.filter';
@@ -15,10 +16,24 @@ import { WsAuthService } from '@/common/src/ws-auth/ws-auth.service';
 import { StoryGameService } from './story-game.service';
 import { StoryError } from './domain/story-game.errors';
 import { StorySnapshot } from './domain/story-game.types';
-import { LobbyView, toLobbyView } from './domain/story-game.views';
+import {
+  GameStateView,
+  LobbyView,
+  PanelReviewResultView,
+  toGameStateView,
+  toLobbyView,
+} from './domain/story-game.views';
+import {
+  PanelConfirmedEvent,
+  STORY_EVENTS,
+  StoryStateChangedEvent,
+  TurnStartedEvent,
+} from './domain/story-game.events';
 import { JoinStoryGameDto } from './dto/join-story-game.dto';
 import { UpdateConfigDto } from './dto/update-config.dto';
 import { KickPlayerDto } from './dto/kick-player.dto';
+import { SubmitPanelDraftDto } from './dto/submit-panel-draft.dto';
+import { PanelOrderDto } from './dto/panel-order.dto';
 import { createStoryValidationPipe } from './story-validation.pipe';
 import { STORY_ERROR_EVENT, StorySocket, storyUserRoom } from './types';
 
@@ -80,6 +95,8 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
 
       await client.join(snapshot.game.gameId);
       this.broadcast(snapshot);
+      // Estado completo para reconstruir la pantalla (incluido su turno, si es el autor).
+      client.emit('gameState', toGameStateView(snapshot, client.data.userId));
     } catch (error) {
       this.logger.warn(`resume failed for ${client.data.userId}: ${(error as Error).message}`);
     }
@@ -140,15 +157,62 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
     return { ok: true, data: toLobbyView(snapshot), message: 'player kicked' };
   }
 
-  /** LOBBY → PLAYING (solo anfitrión). La apertura del primer turno llega en la Fase 2. */
+  /** LOBBY → PLAYING (solo anfitrión). `lobbyUpdated` y `turnStarted` llegan por los eventos del servicio. */
   @SubscribeMessage('startStory')
   async handleStartStory(@ConnectedSocket() client: StorySocket): Promise<ApiResponse<LobbyView>> {
     const snapshot = await this.storyGameService.startStory(
       await this.requireGameId(client),
       client.data.userId,
     );
-    this.broadcast(snapshot);
     return { ok: true, data: toLobbyView(snapshot), message: 'story started' };
+  }
+
+  /** Borrador del autor. El resultado va solo al autor (todos sus sockets) y en el ack. */
+  @SubscribeMessage('submitPanelDraft')
+  async handleSubmitDraft(
+    @MessageBody() dto: SubmitPanelDraftDto,
+    @ConnectedSocket() client: StorySocket,
+  ): Promise<ApiResponse<PanelReviewResultView>> {
+    const { userId } = client.data;
+    const result = await this.storyGameService.submitPanelDraft(
+      await this.requireGameId(client),
+      userId,
+      dto.panelOrder,
+      {
+        text: dto.text,
+        scene: dto.scene,
+        characterIds: dto.characterIds,
+        newCharacters: dto.newCharacters.map(({ name, kind, description }) => ({
+          name,
+          kind,
+          description,
+        })),
+      },
+    );
+    this.server.to(storyUserRoom(userId)).emit('panelReviewResult', result);
+    return { ok: true, data: result, message: 'draft reviewed' };
+  }
+
+  /** `panelConfirmed` y el siguiente `turnStarted` llegan por los eventos del servicio. */
+  @SubscribeMessage('confirmPanel')
+  async handleConfirmPanel(
+    @MessageBody() dto: PanelOrderDto,
+    @ConnectedSocket() client: StorySocket,
+  ): Promise<ApiResponse<null>> {
+    await this.storyGameService.confirmPanel(
+      await this.requireGameId(client),
+      client.data.userId,
+      dto.panelOrder,
+    );
+    return { ok: true, data: null, message: 'panel confirmed' };
+  }
+
+  @SubscribeMessage('getGameState')
+  async handleGetGameState(
+    @ConnectedSocket() client: StorySocket,
+  ): Promise<ApiResponse<GameStateView>> {
+    const state = await this.storyGameService.getGameState(client.data.userId);
+    return { ok: true, data: state, message: 'game state' };
   }
 
   @SubscribeMessage('leaveGame')
@@ -175,5 +239,23 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
 
   private broadcast(snapshot: StorySnapshot) {
     this.server.to(snapshot.game.gameId).emit('lobbyUpdated', toLobbyView(snapshot));
+  }
+
+  // Eventos del servicio (ya guardados). Llegan en la instancia que hizo el
+  // cambio, incluidos los timers, y se difunden a la sala en todas.
+
+  @OnEvent(STORY_EVENTS.stateChanged)
+  onStateChanged({ snapshot }: StoryStateChangedEvent) {
+    this.broadcast(snapshot);
+  }
+
+  @OnEvent(STORY_EVENTS.turnStarted)
+  onTurnStarted({ gameId, ...turn }: TurnStartedEvent) {
+    this.server.to(gameId).emit('turnStarted', turn);
+  }
+
+  @OnEvent(STORY_EVENTS.panelConfirmed)
+  onPanelConfirmed({ gameId, ...panel }: PanelConfirmedEvent) {
+    this.server.to(gameId).emit('panelConfirmed', panel);
   }
 }

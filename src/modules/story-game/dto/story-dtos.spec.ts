@@ -4,6 +4,8 @@ import { StoryError } from '../domain/story-game.errors';
 import { UpdateConfigDto } from './update-config.dto';
 import { KickPlayerDto } from './kick-player.dto';
 import { JoinStoryGameDto } from './join-story-game.dto';
+import { SubmitPanelDraftDto } from './submit-panel-draft.dto';
+import { PanelOrderDto } from './panel-order.dto';
 
 const pipe = createStoryValidationPipe();
 const body = (metatype: ArgumentMetadata['metatype']): ArgumentMetadata => ({
@@ -67,6 +69,64 @@ describe('story DTO validation', () => {
       });
       expect((await rejectionOf({}, KickPlayerDto)).code).toBe('VALIDATION_ERROR');
       expect((await rejectionOf({ userId: 42 }, KickPlayerDto)).code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('SubmitPanelDraftDto', () => {
+    const valid = {
+      panelOrder: 0,
+      text: '  The robot walked into the forest at night.  ',
+      scene: 'Forest',
+      characterIds: ['ch-0-0'],
+      newCharacters: [{ name: ' Beep ', kind: 'robot', description: 'tiny silver robot' }],
+    };
+
+    it('trims the texts and the nested sheets', async () => {
+      const dto = (await pipe.transform(valid, body(SubmitPanelDraftDto))) as SubmitPanelDraftDto;
+      expect(dto.text).toBe('The robot walked into the forest at night.');
+      expect(dto.newCharacters[0].name).toBe('Beep');
+    });
+
+    it('defaults the character lists to empty', async () => {
+      const dto = (await pipe.transform(
+        { panelOrder: 0, text: 'x', scene: 'y' },
+        body(SubmitPanelDraftDto),
+      )) as SubmitPanelDraftDto;
+      expect(dto.characterIds).toEqual([]);
+      expect(dto.newCharacters).toEqual([]);
+    });
+
+    it.each([
+      ['a text over 320 chars', { text: 'x'.repeat(321) }],
+      ['a scene over 200 chars', { scene: 'x'.repeat(201) }],
+      ['an empty scene', { scene: '   ' }],
+      ['more than 3 characterIds', { characterIds: ['a', 'b', 'c', 'd'] }],
+      [
+        'more than 2 new characters',
+        {
+          newCharacters: [1, 2, 3].map((i) => ({ name: `N${i}`, kind: 'cat', description: 'd' })),
+        },
+      ],
+      [
+        'a description over 100 chars',
+        { newCharacters: [{ name: 'Beep', kind: 'robot', description: 'x'.repeat(101) }] },
+      ],
+      ['a sheet without kind', { newCharacters: [{ name: 'Beep', description: 'tiny' }] }],
+      ['a non-integer panelOrder', { panelOrder: 1.5 }],
+    ])('rejects %s', async (_, override) => {
+      const error = await rejectionOf({ ...valid, ...override }, SubmitPanelDraftDto);
+      expect(error.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('PanelOrderDto', () => {
+    it('requires an integer panelOrder in range', async () => {
+      await expect(pipe.transform({ panelOrder: 3 }, body(PanelOrderDto))).resolves.toEqual({
+        panelOrder: 3,
+      });
+      expect((await rejectionOf({}, PanelOrderDto)).code).toBe('VALIDATION_ERROR');
+      expect((await rejectionOf({ panelOrder: -1 }, PanelOrderDto)).code).toBe('VALIDATION_ERROR');
+      expect((await rejectionOf({ panelOrder: 10 }, PanelOrderDto)).code).toBe('VALIDATION_ERROR');
     });
   });
 });

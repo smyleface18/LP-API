@@ -1,4 +1,5 @@
 import { StoryLanguage, StoryLevel, StoryTurnDurationSec } from '../story-game.config';
+import { LanguageReview } from '@/modules/language-review/language-review.types';
 
 /**
  * Estados de la partida. Solo el servidor los cambia:
@@ -81,8 +82,57 @@ export interface StoryGame {
   createdAt: number;
 }
 
-/** Estado leído de Redis: partida + elenco (`story:{gameId}:characters`, characterId → personaje). */
+/** Lo que el autor envía en `submitPanelDraft`. */
+export interface DraftInput {
+  text: string;
+  scene: string;
+  /** Personajes del elenco que aparecen en la viñeta. */
+  characterIds: string[];
+  /** Personajes nuevos propuestos: entran al elenco recién al confirmar. */
+  newCharacters: CharacterSheet[];
+}
+
+/** Borrador ya revisado. `review: null` = la IA no estaba disponible. */
+export interface PanelDraft extends DraftInput {
+  review: LanguageReview | null;
+}
+
+/** Puntaje de una viñeta (se calcula en la Fase 3; en la Fase 2 solo el caso sin texto). */
+export interface PanelScore {
+  accuracy: number;
+  firstTryBonus: number;
+  selfCorrectionBonus: number;
+  timeoutPenalty: boolean;
+  total: number;
+}
+
+export type PanelConfirmedBy = 'player' | 'timeout';
+
+/** Hash `story:{gameId}:panels`, order → viñeta. */
+export interface PanelState {
+  order: number;
+  authorId: string;
+  /** El cierre (confirmar o timeout) pasa de 'open' a 'closed' una sola vez. */
+  status: 'open' | 'closed';
+  /** Revisiones exitosas usadas (máx. MAX_REVIEW_ATTEMPTS). */
+  attempts: number;
+  drafts: PanelDraft[];
+  /** Revisión en curso: mientras exista se rechaza otro borrador. */
+  reviewing: { attemptId: string; startedAt: number } | null;
+  /** Último texto escrito por el jugador. */
+  originalText: string | null;
+  /** Texto que se narra (siempre el corregido). */
+  finalText: string | null;
+  scene: string | null;
+  /** Al confirmar: existentes + nuevos ya creados. */
+  characterIds: string[];
+  score: PanelScore | null;
+  confirmedBy: PanelConfirmedBy | null;
+}
+
+/** Estado leído de Redis: partida, elenco (characterId → personaje) y viñetas (order → viñeta). */
 export interface StorySnapshot {
   game: StoryGame;
   characters: Record<string, StoryCharacter>;
+  panels: Record<number, PanelState>;
 }

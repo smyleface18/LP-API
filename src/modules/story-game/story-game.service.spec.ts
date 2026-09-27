@@ -1,128 +1,38 @@
-import { Repository } from 'typeorm';
-import { EventEmitter2 } from '@nestjs/event-emitter';
-import { User } from '@/db/entities';
-import { LockHandle } from '@/common/src/redis/redis-lock.service';
-import { UniqueNamesAdapter } from '@/common/src/unique-names/unique-names.adapter';
 import { Level } from '@/db/enum/question.enum';
 import { StoryGameService } from './story-game.service';
-import { StoryChanges, StoryStateRepository } from './story-state.repository';
-import { StoryError, StoryErrorCode } from './domain/story-game.errors';
-import { StoryGame, StorySnapshot, StoryStatus } from './domain/story-game.types';
+import { StoryStatus } from './domain/story-game.types';
 import { IDLE_ABANDON_DELAY_MS } from './story-game.config';
 import { STORY_CANCEL_EVENT, STORY_SCHEDULE_EVENT } from './queue/type';
-
-/**
- * Redis en memoria con la misma interfaz que StoryStateRepository. Guarda JSON
- * (cada lectura es una copia, como en Redis) y serializa withGameLock.
- */
-class InMemoryStoryStore {
-  games = new Map<string, string>();
-  userGames = new Map<string, string>();
-  private queue: Promise<unknown> = Promise.resolve();
-
-  get(gameId: string): Promise<StorySnapshot | null> {
-    const raw = this.games.get(gameId);
-    return Promise.resolve(raw ? (JSON.parse(raw) as StorySnapshot) : null);
-  }
-
-  create(game: StoryGame): Promise<boolean> {
-    if (this.games.has(game.gameId)) return Promise.resolve(false);
-    this.games.set(game.gameId, JSON.stringify({ game, characters: {} }));
-    return Promise.resolve(true);
-  }
-
-  async save(gameId: string, _lock: LockHandle, changes: StoryChanges): Promise<void> {
-    const snapshot = (await this.get(gameId))!;
-    if (changes.game) snapshot.game = changes.game;
-    Object.assign(snapshot.characters, changes.addCharacters);
-    this.games.set(gameId, JSON.stringify(snapshot));
-  }
-
-  withGameLock<T>(gameId: string, fn: (lock: LockHandle) => Promise<T>): Promise<T> {
-    const run = this.queue.then(() => fn({ key: `lock:${gameId}`, token: 't' }));
-    this.queue = run.catch(() => undefined);
-    return run;
-  }
-
-  setUserGame(userId: string, gameId: string): Promise<void> {
-    this.userGames.set(userId, gameId);
-    return Promise.resolve();
-  }
-
-  getUserGame(userId: string): Promise<string | null> {
-    return Promise.resolve(this.userGames.get(userId) ?? null);
-  }
-
-  clearUserGame(userId: string, gameId: string): Promise<void> {
-    if (this.userGames.get(userId) === gameId) this.userGames.delete(userId);
-    return Promise.resolve();
-  }
-}
-
-async function expectStoryError(promise: Promise<unknown>, code: StoryErrorCode) {
-  await expect(promise).rejects.toBeInstanceOf(StoryError);
-  await promise.catch((error: StoryError) => expect(error.code).toBe(code));
-}
+import {
+  createStoryHarness,
+  expectStoryError,
+  InMemoryStoryStore,
+} from '../../../test/story-game/story-harness';
 
 describe('StoryGameService', () => {
   const T0 = 1_800_000_000_000;
-  let now: number;
+  let clock: { now: number };
   let store: InMemoryStoryStore;
-  let events: { emit: jest.Mock; emitAsync: jest.Mock };
   let service: StoryGameService;
-  let nextName: number;
+  let lobbyWith: (...ids: string[]) => Promise<string>;
+  let playingWith: (...ids: string[]) => Promise<string>;
+  let gameOf: ReturnType<typeof createStoryHarness>['gameOf'];
+  let scheduled: ReturnType<typeof createStoryHarness>['scheduled'];
+  let cancelled: ReturnType<typeof createStoryHarness>['cancelled'];
 
   beforeEach(() => {
-    now = T0;
-    jest.spyOn(Date, 'now').mockImplementation(() => now);
-    store = new InMemoryStoryStore();
-    events = { emit: jest.fn(), emitAsync: jest.fn().mockResolvedValue([]) };
-    nextName = 0;
-    const users = {
-      findOne: jest.fn(({ where: { id } }: { where: { id: string } }) =>
-        Promise.resolve(id === 'ghost' ? null : ({ id, username: `name-${id}` } as User)),
-      ),
-    } as unknown as Repository<User>;
-    const uniqueNames = {
-      NamesGenerator: () => `game-${++nextName}`,
-    } as UniqueNamesAdapter;
-
-    service = new StoryGameService(
-      store as unknown as StoryStateRepository,
-      users,
-      uniqueNames,
-      events as unknown as EventEmitter2,
-    );
+    ({ clock, store, service, lobbyWith, playingWith, gameOf, scheduled, cancelled } =
+      createStoryHarness(T0));
   });
 
   afterEach(() => jest.restoreAllMocks());
 
-  /** Partida con `ids` en orden de entrada; el primero es el anfitrión. */
-  async function lobbyWith(...ids: string[]): Promise<string> {
-    const { game } = await service.createGame(ids[0]);
-    for (const id of ids.slice(1)) await service.joinGame(game.gameId, id);
-    return game.gameId;
-  }
-
-  async function playingWith(...ids: string[]): Promise<string> {
-    const gameId = await lobbyWith(...ids);
-    await service.startStory(gameId, ids[0]);
-    return gameId;
-  }
-
-  const gameOf = async (gameId: string) => (await service.getSnapshot(gameId)).game;
-
   /** Lleva la partida a un estado de fases posteriores (todavía sin transición propia). */
   async function forceStatus(gameId: string, status: StoryStatus) {
-    const snapshot = (await store.get(gameId))!;
-    snapshot.game.status = status;
-    store.games.set(gameId, JSON.stringify(snapshot));
+    await store.patch(gameId, (snapshot) => {
+      snapshot.game.status = status;
+    });
   }
-  type EmitCall = [string, unknown];
-  const scheduled = () =>
-    (events.emitAsync.mock.calls as EmitCall[]).filter(([event]) => event === STORY_SCHEDULE_EVENT);
-  const cancelled = () =>
-    (events.emit.mock.calls as EmitCall[]).filter(([event]) => event === STORY_CANCEL_EVENT);
 
   describe('lobby', () => {
     it('creates a LOBBY game with the creator as host and the default config', async () => {
@@ -376,14 +286,14 @@ describe('StoryGameService', () => {
 
       expect(snapshot?.game.status).toBe(StoryStatus.LOBBY);
       expect(snapshot?.game.abandonAt).toBe(T0 + IDLE_ABANDON_DELAY_MS);
-      expect(scheduled()).toEqual([
+      expect(scheduled('abandon-idle')).toEqual([
         [
           STORY_SCHEDULE_EVENT,
           { gameId, kind: 'abandon-idle', seq: 1, dueAt: T0 + IDLE_ABANDON_DELAY_MS },
         ],
       ]);
 
-      now += IDLE_ABANDON_DELAY_MS;
+      clock.now += IDLE_ABANDON_DELAY_MS;
       await service.abandonIdleGame(gameId, 1);
       expect((await gameOf(gameId)).status).toBe(StoryStatus.ABANDONED);
     });
@@ -392,10 +302,10 @@ describe('StoryGameService', () => {
       const gameId = await lobbyWith('alice');
       await service.disconnect(gameId, 'alice');
 
-      now += 30_000;
+      clock.now += 30_000;
       const snapshot = await service.resume('alice');
       expect(snapshot?.game.abandonAt).toBeNull();
-      expect(cancelled()).toEqual([
+      expect(cancelled('abandon-idle')).toEqual([
         [
           STORY_CANCEL_EVENT,
           { gameId, kind: 'abandon-idle', seq: 1, dueAt: T0 + IDLE_ABANDON_DELAY_MS },
@@ -403,7 +313,7 @@ describe('StoryGameService', () => {
       ]);
 
       // Aunque la tarea corra igual (no se pudo borrar), está obsoleta.
-      now = T0 + IDLE_ABANDON_DELAY_MS;
+      clock.now = T0 + IDLE_ABANDON_DELAY_MS;
       await service.abandonIdleGame(gameId, 1);
       expect((await gameOf(gameId)).status).toBe(StoryStatus.LOBBY);
     });
@@ -412,14 +322,14 @@ describe('StoryGameService', () => {
       const gameId = await lobbyWith('alice');
       await service.disconnect(gameId, 'alice'); // seq 1
       await service.resume('alice');
-      now += 10_000;
+      clock.now += 10_000;
       await service.disconnect(gameId, 'alice'); // seq 2, vence más tarde
 
-      now = T0 + IDLE_ABANDON_DELAY_MS;
+      clock.now = T0 + IDLE_ABANDON_DELAY_MS;
       await service.abandonIdleGame(gameId, 1);
       expect((await gameOf(gameId)).status).toBe(StoryStatus.LOBBY);
 
-      now = T0 + 10_000 + IDLE_ABANDON_DELAY_MS;
+      clock.now = T0 + 10_000 + IDLE_ABANDON_DELAY_MS;
       await service.abandonIdleGame(gameId, 2);
       expect((await gameOf(gameId)).status).toBe(StoryStatus.ABANDONED);
     });
@@ -437,7 +347,7 @@ describe('StoryGameService', () => {
       const gameId = await lobbyWith('alice');
       const { game } = await service.leaveGame(gameId, 'alice');
       expect(game.status).toBe(StoryStatus.ABANDONED);
-      expect(scheduled()).toHaveLength(0);
+      expect(scheduled('abandon-idle')).toHaveLength(0);
     });
 
     it('waits when the last connected player leaves but disconnected ones remain', async () => {
@@ -445,7 +355,7 @@ describe('StoryGameService', () => {
       await service.disconnect(gameId, 'bob');
       const { game } = await service.leaveGame(gameId, 'alice');
       expect(game.status).toBe(StoryStatus.LOBBY);
-      expect(scheduled()).toHaveLength(1);
+      expect(scheduled('abandon-idle')).toHaveLength(1);
     });
 
     it('gives a PLAYING game the same 60 s margin', async () => {
@@ -453,9 +363,9 @@ describe('StoryGameService', () => {
       await service.disconnect(gameId, 'bob');
       const snapshot = await service.disconnect(gameId, 'alice');
       expect(snapshot?.game.status).toBe(StoryStatus.PLAYING);
-      expect(scheduled()).toHaveLength(1);
+      expect(scheduled('abandon-idle')).toHaveLength(1);
 
-      now += IDLE_ABANDON_DELAY_MS;
+      clock.now += IDLE_ABANDON_DELAY_MS;
       await service.abandonIdleGame(gameId, 1);
       expect((await gameOf(gameId)).status).toBe(StoryStatus.ABANDONED);
     });
@@ -463,10 +373,10 @@ describe('StoryGameService', () => {
     it('survives a redeploy: everyone drops and comes back within the margin', async () => {
       const gameId = await playingWith('alice', 'bob', 'carol');
       for (const id of ['alice', 'bob', 'carol']) await service.disconnect(gameId, id);
-      now += 5_000;
+      clock.now += 5_000;
       for (const id of ['carol', 'alice', 'bob']) await service.resume(id);
 
-      now = T0 + IDLE_ABANDON_DELAY_MS;
+      clock.now = T0 + IDLE_ABANDON_DELAY_MS;
       await service.abandonIdleGame(gameId, 1);
       const game = await gameOf(gameId);
       expect(game.status).toBe(StoryStatus.PLAYING);
@@ -479,7 +389,7 @@ describe('StoryGameService', () => {
       await service.leaveGame(gameId, 'bob');
       const { game } = await service.leaveGame(gameId, 'alice');
       expect(game.status).toBe(StoryStatus.ABANDONED);
-      expect(scheduled()).toHaveLength(0);
+      expect(scheduled('abandon-idle')).toHaveLength(0);
     });
 
     it.each([StoryStatus.PROCESSING, StoryStatus.REVIEW])(
@@ -493,7 +403,7 @@ describe('StoryGameService', () => {
         const game = await gameOf(gameId);
         expect(game.status).toBe(status);
         expect(game.abandonAt).toBeNull();
-        expect(scheduled()).toHaveLength(0);
+        expect(scheduled('abandon-idle')).toHaveLength(0);
       },
     );
 
@@ -503,7 +413,7 @@ describe('StoryGameService', () => {
       await service.disconnect(gameId, 'alice'); // abandon-idle seq 1 pendiente
       await forceStatus(gameId, StoryStatus.PROCESSING);
 
-      now += IDLE_ABANDON_DELAY_MS;
+      clock.now += IDLE_ABANDON_DELAY_MS;
       await service.abandonIdleGame(gameId, 1);
       expect((await gameOf(gameId)).status).toBe(StoryStatus.PROCESSING);
     });
@@ -522,7 +432,7 @@ describe('StoryGameService', () => {
       const gameId = await playingWith('alice', 'bob');
       await service.disconnect(gameId, 'bob');
       await service.disconnect(gameId, 'alice');
-      now += IDLE_ABANDON_DELAY_MS;
+      clock.now += IDLE_ABANDON_DELAY_MS;
       await service.abandonIdleGame(gameId, 1);
       expect(await service.resume('alice')).toBeNull();
       expect(await store.getUserGame('alice')).toBeNull();

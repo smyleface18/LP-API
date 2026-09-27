@@ -2,7 +2,13 @@ import { Inject, Injectable } from '@nestjs/common';
 import { EnvsService } from '@/common/src/envs/envs.service';
 import { REDIS_CLIENT, RedisClient } from '@/common/src/redis/redis.token';
 import { LockHandle, RedisLockService } from '@/common/src/redis/redis-lock.service';
-import { StoryCharacter, StoryGame, StorySnapshot, StoryStatus } from './domain/story-game.types';
+import {
+  PanelState,
+  StoryCharacter,
+  StoryGame,
+  StorySnapshot,
+  StoryStatus,
+} from './domain/story-game.types';
 
 export class StoryLockLostError extends Error {
   constructor(gameId: string) {
@@ -11,12 +17,37 @@ export class StoryLockLostError extends Error {
   }
 }
 
+/**
+ * La guarda de una escritura no se cumplió: la viñeta ya no está abierta (o la
+ * revisión en curso ya no es la misma). No se escribió nada.
+ */
+export class PanelGuardError extends Error {
+  constructor(gameId: string, order: number) {
+    super(`Panel ${order} of story ${gameId} is no longer in the expected state`);
+    this.name = 'PanelGuardError';
+  }
+}
+
+/**
+ * Condición que Redis verifica en el mismo script, antes de escribir: la
+ * viñeta `order` sigue abierta y, si se indica, su revisión en curso es
+ * `attemptId`. Así un turno se cierra una sola vez aunque confirmación y
+ * timeout lleguen juntos.
+ */
+export interface PanelGuard {
+  order: number;
+  attemptId?: string;
+}
+
 /** Cambios a aplicar en una sola escritura atómica. */
 export interface StoryChanges {
   /** Partida completa: el hash es chico y se reescribe entero. */
   game?: StoryGame;
   /** Personajes nuevos (characterId → personaje). El elenco solo crece. */
   addCharacters?: Record<string, StoryCharacter>;
+  setPanels?: PanelState[];
+  deletePanels?: number[];
+  guard?: PanelGuard;
 }
 
 interface HashOps {
@@ -35,12 +66,31 @@ end
 redis.call('PEXPIRE', KEYS[1], ARGV[1])
 return 1`;
 
-// Escribe solo si el lock sigue siendo nuestro (fencing, como MatchStore.save).
+// Escribe solo si el lock sigue siendo nuestro (fencing, como MatchStore.save)
+// y, si hay guarda, si la viñeta sigue abierta (y con la misma revisión).
 // KEYS: lock, partida, personajes, viñetas. ARGV: token, ttl, ops (json, un
-// { set, del } por hash). Todas las claves comparten el hash tag {gameId}.
+// { set, del } por hash), guarda (json o ''). Devuelve 1 ok, 0 lock perdido,
+// -1 guarda incumplida. Todas las claves comparten el hash tag {gameId}.
 const FENCED_WRITE_SCRIPT = `
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then
   return 0
+end
+if ARGV[4] ~= '' then
+  local guard = cjson.decode(ARGV[4])
+  local raw = redis.call('HGET', KEYS[4], tostring(guard.order))
+  if not raw then
+    return -1
+  end
+  local panel = cjson.decode(raw)
+  if panel.status ~= 'open' then
+    return -1
+  end
+  if guard.attemptId then
+    local reviewing = panel.reviewing
+    if type(reviewing) ~= 'table' or reviewing.attemptId ~= guard.attemptId then
+      return -1
+    end
+  end
 end
 local ops = cjson.decode(ARGV[3])
 for i, op in ipairs(ops) do
@@ -99,11 +149,11 @@ export class StoryStateRepository {
   }
 
   async get(gameId: string): Promise<StorySnapshot | null> {
-    const [rawGame, rawCharacters] = await Promise.all([
-      this.redis.hGetAll(StoryStateRepository.gameKey(gameId)) as Promise<Record<string, string>>,
-      this.redis.hGetAll(StoryStateRepository.charactersKey(gameId)) as Promise<
-        Record<string, string>
-      >,
+    const hash = (key: string) => this.redis.hGetAll(key) as Promise<Record<string, string>>;
+    const [rawGame, rawCharacters, rawPanels] = await Promise.all([
+      hash(StoryStateRepository.gameKey(gameId)),
+      hash(StoryStateRepository.charactersKey(gameId)),
+      hash(StoryStateRepository.panelsKey(gameId)),
     ]);
     if (!rawGame || Object.keys(rawGame).length === 0) return null;
 
@@ -111,7 +161,11 @@ export class StoryStateRepository {
     for (const [characterId, character] of Object.entries(rawCharacters ?? {})) {
       characters[characterId] = JSON.parse(character) as StoryCharacter;
     }
-    return { game: deserializeGame(gameId, rawGame), characters };
+    const panels: Record<number, PanelState> = {};
+    for (const [order, panel] of Object.entries(rawPanels ?? {})) {
+      panels[Number(order)] = JSON.parse(panel) as PanelState;
+    }
+    return { game: deserializeGame(gameId, rawGame), characters, panels };
   }
 
   /** Crea la partida solo si no existe otra con ese id. Devuelve false si ya existía. */
@@ -132,7 +186,10 @@ export class StoryStateRepository {
       ]),
       del: [],
     };
-    const panels: HashOps = { set: [], del: [] };
+    const panels: HashOps = {
+      set: (changes.setPanels ?? []).map((panel) => [String(panel.order), JSON.stringify(panel)]),
+      del: (changes.deletePanels ?? []).map(String),
+    };
     const game = changes.game ? serializeGame(changes.game) : { set: [], del: [] };
 
     const saved = await this.redis.eval(FENCED_WRITE_SCRIPT, {
@@ -142,8 +199,14 @@ export class StoryStateRepository {
         StoryStateRepository.charactersKey(gameId),
         StoryStateRepository.panelsKey(gameId),
       ],
-      arguments: [lock.token, String(this.ttlMs), JSON.stringify([game, characters, panels])],
+      arguments: [
+        lock.token,
+        String(this.ttlMs),
+        JSON.stringify([game, characters, panels]),
+        changes.guard ? JSON.stringify(changes.guard) : '',
+      ],
     });
+    if (saved === -1) throw new PanelGuardError(gameId, changes.guard!.order);
     if (saved !== 1) throw new StoryLockLostError(gameId);
   }
 

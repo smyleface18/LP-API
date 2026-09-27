@@ -39,7 +39,17 @@ export const MAX_CHARS_PER_PANEL = 320;
 export const MIN_WORDS_PER_PANEL = 8;
 export const MAX_CHARS_PER_SCENE = 200;
 
-/** Personajes: se crean durante los turnos (Fase 2). */
+/**
+ * Una revisión en curso más vieja que esto se da por perdida (ej. la instancia
+ * murió mientras esperaba a la IA) y el autor puede volver a enviar. Cubre el
+ * timeout de la IA con su reintento.
+ */
+export const REVIEW_STALE_MS = 30_000;
+
+/** Texto de una viñeta cuyo turno venció sin ningún borrador. */
+export const OUT_OF_TIME_TEXT = '(The author ran out of time.)';
+
+/** Personajes: se crean durante los turnos. */
 export const MAX_CHARACTERS_PER_STORY = 6;
 export const MAX_NEW_CHARACTERS_PER_PANEL = 2;
 export const MAX_CHARACTERS_PER_PANEL = 3;
