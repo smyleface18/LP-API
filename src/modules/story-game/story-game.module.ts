@@ -11,5 +11,6 @@ import { StoryStateRepository } from './story-state.repository';
 @Module({
   imports: [RedisModule, WsAuthModule, UniqueNamesModule, TypeOrmModule.forFeature([User])],
   providers: [StoryGameGateway, StoryGameService, StoryStateRepository],
+  exports: [StoryGameService],
 })
 export class StoryGameModule {}

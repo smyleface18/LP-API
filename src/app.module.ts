@@ -14,6 +14,7 @@ import { WsAuthModule } from './common/src/ws-auth/ws-auth.module';
 import { CommonModule } from './common/common.module';
 import { MediaModule } from './modules/media/media.module';
 import { StoryGameModule } from './modules/story-game/story-game.module';
+import { StoryQueueModule } from './modules/story-game/queue/story-queue.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { StoryGameModule } from './modules/story-game/story-game.module';
     WsAuthModule,
     MediaModule,
     StoryGameModule,
+    StoryQueueModule,
   ],
   controllers: [AppController],
   providers: [AppService],

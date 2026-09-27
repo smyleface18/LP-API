@@ -11,7 +11,10 @@ export type StoryErrorCode =
   | 'INVALID_STATE'
   | 'GAME_FULL'
   | 'NOT_ENOUGH_PLAYERS'
-  | 'CHARACTERS_MISSING';
+  | 'NOT_ENOUGH_PANELS'
+  | 'CANNOT_KICK_SELF'
+  /** Se envía al jugador expulsado por el anfitrión. */
+  | 'KICKED';
 
 /**
  * Error de dominio del modo Historieta. Es una HttpException para que

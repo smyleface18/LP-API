@@ -7,25 +7,26 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
-import { Logger, UseFilters, UsePipes } from '@nestjs/common';
+import { HttpStatus, Logger, UseFilters, UsePipes } from '@nestjs/common';
 import { Server } from 'socket.io';
 import { ApiResponse } from '@/common/src/api/api.type';
 import { WsHttpExceptionFilter } from '@/common/src/api/ws-exception.filter';
 import { WsAuthService } from '@/common/src/ws-auth/ws-auth.service';
 import { StoryGameService } from './story-game.service';
 import { StoryError } from './domain/story-game.errors';
-import { StorySnapshot, StoryStatus } from './domain/story-game.types';
-import { LobbyView, toCharactersView, toLobbyView } from './domain/story-game.views';
+import { StorySnapshot } from './domain/story-game.types';
+import { LobbyView, toLobbyView } from './domain/story-game.views';
 import { JoinStoryGameDto } from './dto/join-story-game.dto';
 import { UpdateConfigDto } from './dto/update-config.dto';
-import { CreateCharacterDto } from './dto/create-character.dto';
+import { KickPlayerDto } from './dto/kick-player.dto';
 import { createStoryValidationPipe } from './story-validation.pipe';
-import { STORY_ERROR_EVENT, StorySocket } from './types';
+import { STORY_ERROR_EVENT, StorySocket, storyUserRoom } from './types';
 
 /**
  * Namespace /story (modo Historieta). Solo traduce eventos: las reglas viven
- * en StoryGameService. La sala de Socket.IO es el gameId; el adapter de Redis
- * difunde entre instancias.
+ * en StoryGameService. La sala de Socket.IO es el gameId; además cada socket
+ * está en `user:{userId}` para poder avisarle a un usuario en cualquier
+ * instancia. El adapter de Redis difunde entre instancias.
  */
 @UseFilters(new WsHttpExceptionFilter(STORY_ERROR_EVENT))
 @UsePipes(createStoryValidationPipe())
@@ -51,6 +52,7 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
     const user = await this.wsAuthService.authenticateSocket(client, STORY_ERROR_EVENT);
     if (!user) return;
 
+    await client.join(storyUserRoom(client.data.userId));
     this.logger.debug(`user connected: ${client.data.userId}`);
     await this.resume(client);
   }
@@ -75,9 +77,6 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
 
       await this.enterRoom(client, snapshot.game.gameId);
       this.broadcast(snapshot);
-      if (snapshot.game.status !== StoryStatus.LOBBY) {
-        client.emit('charactersUpdated', toCharactersView(snapshot));
-      }
     } catch (error) {
       this.logger.warn(`resume failed for ${client.data.userId}: ${(error as Error).message}`);
     }
@@ -98,7 +97,7 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
   ): Promise<ApiResponse<LobbyView>> {
     const snapshot = await this.storyGameService.joinGame(dto.gameId, client.data.userId);
     await this.enterRoom(client, snapshot.game.gameId);
-    this.broadcast(snapshot, { characters: snapshot.game.status !== StoryStatus.LOBBY });
+    this.broadcast(snapshot);
     return { ok: true, data: toLobbyView(snapshot), message: 'story game joined' };
   }
 
@@ -116,33 +115,29 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
     return { ok: true, data: toLobbyView(snapshot), message: 'config updated' };
   }
 
-  @SubscribeMessage('startCharacters')
-  async handleStartCharacters(
+  @SubscribeMessage('kickPlayer')
+  async handleKick(
+    @MessageBody() dto: KickPlayerDto,
     @ConnectedSocket() client: StorySocket,
   ): Promise<ApiResponse<LobbyView>> {
-    const snapshot = await this.storyGameService.startCharacters(
-      this.requireGameId(client),
-      client.data.userId,
-    );
-    this.broadcast(snapshot, { characters: true });
-    return { ok: true, data: toLobbyView(snapshot), message: 'characters step started' };
+    const gameId = this.requireGameId(client);
+    const snapshot = await this.storyGameService.kickPlayer(gameId, client.data.userId, dto.userId);
+
+    // El expulsado puede estar conectado a otra instancia: se le habla por su sala personal.
+    const target = storyUserRoom(dto.userId);
+    this.server.to(target).emit(STORY_ERROR_EVENT, {
+      ok: false,
+      status: HttpStatus.FORBIDDEN,
+      message: 'The host removed you from the game',
+      code: 'KICKED',
+    });
+    this.server.in(target).socketsLeave(gameId);
+
+    this.broadcast(snapshot);
+    return { ok: true, data: toLobbyView(snapshot), message: 'player kicked' };
   }
 
-  @SubscribeMessage('createCharacter')
-  async handleCreateCharacter(
-    @MessageBody() dto: CreateCharacterDto,
-    @ConnectedSocket() client: StorySocket,
-  ): Promise<ApiResponse<null>> {
-    const snapshot = await this.storyGameService.createCharacter(
-      this.requireGameId(client),
-      client.data.userId,
-      dto,
-    );
-    this.broadcast(snapshot, { characters: true });
-    return { ok: true, data: null, message: 'character saved' };
-  }
-
-  /** CHARACTERS → PLAYING (solo anfitrión). La apertura del primer turno llega en la Fase 2. */
+  /** LOBBY → PLAYING (solo anfitrión). La apertura del primer turno llega en la Fase 2. */
   @SubscribeMessage('startStory')
   async handleStartStory(@ConnectedSocket() client: StorySocket): Promise<ApiResponse<LobbyView>> {
     const snapshot = await this.storyGameService.startStory(
@@ -160,7 +155,7 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
 
     await client.leave(gameId);
     client.data.gameId = undefined;
-    this.broadcast(snapshot, { characters: snapshot.game.status === StoryStatus.CHARACTERS });
+    this.broadcast(snapshot);
     return { ok: true, data: null, message: 'left the game' };
   }
 
@@ -175,9 +170,7 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
     return gameId;
   }
 
-  private broadcast(snapshot: StorySnapshot, { characters = false } = {}) {
-    const room = snapshot.game.gameId;
-    this.server.to(room).emit('lobbyUpdated', toLobbyView(snapshot));
-    if (characters) this.server.to(room).emit('charactersUpdated', toCharactersView(snapshot));
+  private broadcast(snapshot: StorySnapshot) {
+    this.server.to(snapshot.game.gameId).emit('lobbyUpdated', toLobbyView(snapshot));
   }
 }

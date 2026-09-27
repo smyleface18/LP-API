@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { EnvsService } from '@/common/src/envs/envs.service';
 import { REDIS_CLIENT, RedisClient } from '@/common/src/redis/redis.token';
 import { LockHandle, RedisLockService } from '@/common/src/redis/redis-lock.service';
-import { CharacterSheet, StoryGame, StorySnapshot, StoryStatus } from './domain/story-game.types';
+import { StoryCharacter, StoryGame, StorySnapshot, StoryStatus } from './domain/story-game.types';
 
 export class StoryLockLostError extends Error {
   constructor(gameId: string) {
@@ -15,8 +15,8 @@ export class StoryLockLostError extends Error {
 export interface StoryChanges {
   /** Partida completa: el hash es chico y se reescribe entero. */
   game?: StoryGame;
-  setCharacters?: Record<string, CharacterSheet>;
-  deleteCharacters?: string[];
+  /** Personajes nuevos (characterId → personaje). El elenco solo crece. */
+  addCharacters?: Record<string, StoryCharacter>;
 }
 
 interface HashOps {
@@ -63,8 +63,9 @@ return 1`;
  * Estado de las partidas de Historieta en Redis, compartido por todas las
  * instancias de la API:
  *
- *   story:{gameId}             hash: status, hostId, config, players, currentPanel, turnEndsAt
- *   story:{gameId}:characters  hash: userId → ficha (json)
+ *   story:{gameId}             hash: status, hostId, config, players, currentPanel, turnEndsAt,
+ *                              abandonAt, abandonSeq, createdAt
+ *   story:{gameId}:characters  hash: characterId → personaje (json)
  *   story:{gameId}:panels      hash: order → viñeta (json)
  *
  * Toda modificación se hace dentro de `withGameLock` y se guarda con `save`.
@@ -106,9 +107,9 @@ export class StoryStateRepository {
     ]);
     if (!rawGame || Object.keys(rawGame).length === 0) return null;
 
-    const characters: Record<string, CharacterSheet> = {};
-    for (const [userId, sheet] of Object.entries(rawCharacters ?? {})) {
-      characters[userId] = JSON.parse(sheet) as CharacterSheet;
+    const characters: Record<string, StoryCharacter> = {};
+    for (const [characterId, character] of Object.entries(rawCharacters ?? {})) {
+      characters[characterId] = JSON.parse(character) as StoryCharacter;
     }
     return { game: deserializeGame(gameId, rawGame), characters };
   }
@@ -125,11 +126,11 @@ export class StoryStateRepository {
 
   async save(gameId: string, lock: LockHandle, changes: StoryChanges): Promise<void> {
     const characters: HashOps = {
-      set: Object.entries(changes.setCharacters ?? {}).map(([userId, sheet]) => [
-        userId,
-        JSON.stringify(sheet),
+      set: Object.entries(changes.addCharacters ?? {}).map(([characterId, character]) => [
+        characterId,
+        JSON.stringify(character),
       ]),
-      del: changes.deleteCharacters ?? [],
+      del: [],
     };
     const panels: HashOps = { set: [], del: [] };
     const game = changes.game ? serializeGame(changes.game) : { set: [], del: [] };
@@ -184,11 +185,12 @@ function serializeGame(game: StoryGame): HashOps {
       ['hostId', game.hostId],
       ['config', JSON.stringify(game.config)],
       ['players', JSON.stringify(game.players)],
+      ['abandonSeq', String(game.abandonSeq)],
       ['createdAt', String(game.createdAt)],
     ],
     del: [],
   };
-  for (const field of ['currentPanel', 'turnEndsAt'] as const) {
+  for (const field of ['currentPanel', 'turnEndsAt', 'abandonAt'] as const) {
     const value = game[field];
     if (value === null) ops.del.push(field);
     else ops.set.push([field, String(value)]);
@@ -205,6 +207,8 @@ function deserializeGame(gameId: string, raw: Record<string, string>): StoryGame
     players: JSON.parse(raw.players) as StoryGame['players'],
     currentPanel: raw.currentPanel === undefined ? null : Number(raw.currentPanel),
     turnEndsAt: raw.turnEndsAt === undefined ? null : Number(raw.turnEndsAt),
+    abandonAt: raw.abandonAt === undefined ? null : Number(raw.abandonAt),
+    abandonSeq: Number(raw.abandonSeq ?? 0),
     createdAt: Number(raw.createdAt),
   };
 }

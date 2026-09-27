@@ -2,7 +2,7 @@ import { ArgumentMetadata } from '@nestjs/common';
 import { createStoryValidationPipe } from '../story-validation.pipe';
 import { StoryError } from '../domain/story-game.errors';
 import { UpdateConfigDto } from './update-config.dto';
-import { CreateCharacterDto } from './create-character.dto';
+import { KickPlayerDto } from './kick-player.dto';
 import { JoinStoryGameDto } from './join-story-game.dto';
 
 const pipe = createStoryValidationPipe();
@@ -53,42 +53,20 @@ describe('story DTO validation', () => {
     });
   });
 
-  describe('CreateCharacterDto', () => {
-    const valid = {
-      name: '  Luna ',
-      type: 'girl',
-      trait: 'curly red hair',
-      clothing: 'a yellow raincoat',
-      detail: 'carries a tiny robot',
-    };
-
-    it('trims the fields', async () => {
-      const dto = (await pipe.transform(valid, body(CreateCharacterDto))) as CreateCharacterDto;
-      expect(dto.name).toBe('Luna');
-    });
-
-    it('rejects a name longer than 30 characters', async () => {
-      const error = await rejectionOf({ ...valid, name: 'x'.repeat(31) }, CreateCharacterDto);
-      expect(error.code).toBe('VALIDATION_ERROR');
-    });
-
-    it('rejects a detail longer than 60 characters', async () => {
-      const error = await rejectionOf({ ...valid, detail: 'x'.repeat(61) }, CreateCharacterDto);
-      expect(error.code).toBe('VALIDATION_ERROR');
-    });
-
-    it('rejects blank or missing fields', async () => {
-      const blank = await rejectionOf({ ...valid, trait: '   ' }, CreateCharacterDto);
-      expect(blank.code).toBe('VALIDATION_ERROR');
-      const missing = await rejectionOf({ name: 'Luna' }, CreateCharacterDto);
-      expect(missing.code).toBe('VALIDATION_ERROR');
-    });
-  });
-
   describe('JoinStoryGameDto', () => {
     it('requires a gameId', async () => {
       const error = await rejectionOf({}, JoinStoryGameDto);
       expect(error.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('KickPlayerDto', () => {
+    it('requires a userId string', async () => {
+      await expect(pipe.transform({ userId: 'bob' }, body(KickPlayerDto))).resolves.toEqual({
+        userId: 'bob',
+      });
+      expect((await rejectionOf({}, KickPlayerDto)).code).toBe('VALIDATION_ERROR');
+      expect((await rejectionOf({ userId: 42 }, KickPlayerDto)).code).toBe('VALIDATION_ERROR');
     });
   });
 });

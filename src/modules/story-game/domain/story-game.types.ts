@@ -2,12 +2,11 @@ import { StoryLanguage, StoryLevel, StoryTurnDurationSec } from '../story-game.c
 
 /**
  * Estados de la partida. Solo el servidor los cambia:
- *   LOBBY → CHARACTERS → PLAYING → PROCESSING → REVIEW → FINISHED
- *   cualquiera → ABANDONED (no quedan jugadores conectados)
+ *   LOBBY → PLAYING → PROCESSING → REVIEW → FINISHED
+ *   cualquiera → ABANDONED (no quedan jugadores conectados; en LOBBY tras una espera)
  */
 export enum StoryStatus {
   LOBBY = 'LOBBY',
-  CHARACTERS = 'CHARACTERS',
   PLAYING = 'PLAYING',
   PROCESSING = 'PROCESSING',
   REVIEW = 'REVIEW',
@@ -33,19 +32,28 @@ export interface StoryPlayer {
   username: string;
   connected: boolean;
   /**
-   * Salió de la partida después del lobby/personajes. Se queda en la lista
-   * porque el orden define a quién le toca cada viñeta.
+   * Salió de la partida después del lobby. Se queda en la lista porque el
+   * orden define a quién le toca cada viñeta.
    */
   left: boolean;
   joinedAt: number;
 }
 
+/** Ficha corta: se llena durante un turno con reloj. En inglés. */
 export interface CharacterSheet {
+  /** "Max". */
   name: string;
-  type: string;
-  trait: string;
-  clothing: string;
-  detail: string;
+  /** "dog", "girl", "robot"... */
+  kind: string;
+  /** Aspecto en una línea: "small brown dog with a red collar". */
+  description: string;
+}
+
+/** Personaje del elenco. Inmutable una vez agregado: otras viñetas dependen de él. */
+export interface StoryCharacter extends CharacterSheet {
+  id: string;
+  createdBy: string;
+  introducedInPanel: number;
 }
 
 /** Hash `story:{gameId}`. */
@@ -58,11 +66,15 @@ export interface StoryGame {
   players: StoryPlayer[];
   currentPanel: number | null;
   turnEndsAt: number | null;
+  /** Cuándo se abandona el lobby vacío; null si hay alguien conectado. */
+  abandonAt: number | null;
+  /** Sube cada vez que el lobby queda vacío: invalida tareas de abandono viejas. */
+  abandonSeq: number;
   createdAt: number;
 }
 
-/** Estado leído de Redis: partida + fichas (`story:{gameId}:characters`, userId → ficha). */
+/** Estado leído de Redis: partida + elenco (`story:{gameId}:characters`, characterId → personaje). */
 export interface StorySnapshot {
   game: StoryGame;
-  characters: Record<string, CharacterSheet>;
+  characters: Record<string, StoryCharacter>;
 }

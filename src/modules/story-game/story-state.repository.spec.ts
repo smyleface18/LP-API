@@ -13,6 +13,8 @@ const GAME: StoryGame = {
   players: [{ userId: 'alice', username: 'Alice', connected: true, left: false, joinedAt: 1 }],
   currentPanel: null,
   turnEndsAt: null,
+  abandonAt: null,
+  abandonSeq: 0,
   createdAt: 1,
 };
 
@@ -65,7 +67,14 @@ describe('StoryStateRepository (mocked Redis)', () => {
 
   it('round-trips a game through the hash format', async () => {
     redis.eval.mockResolvedValue(1);
-    const playing = { ...GAME, status: StoryStatus.PLAYING, currentPanel: 2, turnEndsAt: 99 };
+    const playing = {
+      ...GAME,
+      status: StoryStatus.PLAYING,
+      currentPanel: 2,
+      turnEndsAt: 99,
+      abandonAt: 5,
+      abandonSeq: 3,
+    };
     await repository.save(GAME.gameId, { key: 'lock', token: 'tok' }, { game: playing });
 
     const [gameOps] = JSON.parse(evalOptions().arguments[2]) as {
@@ -75,14 +84,14 @@ describe('StoryStateRepository (mocked Redis)', () => {
     redis.hGetAll.mockImplementation((key: string) =>
       Promise.resolve(
         key.endsWith(':characters')
-          ? { alice: JSON.stringify({ name: 'Luna' }) }
+          ? { c1: JSON.stringify({ name: 'Luna' }) }
           : Object.fromEntries(gameOps.set),
       ),
     );
 
     expect(await repository.get(GAME.gameId)).toEqual({
       game: playing,
-      characters: { alice: { name: 'Luna' } },
+      characters: { c1: { name: 'Luna' } },
     });
   });
 
@@ -96,7 +105,7 @@ describe('StoryStateRepository (mocked Redis)', () => {
     await repository.save(
       GAME.gameId,
       { key: 'story:{brave-red-fox}:lock', token: 'tok' },
-      { setCharacters: { bob: { name: 'Max' } as never }, deleteCharacters: ['carol'] },
+      { addCharacters: { c2: { name: 'Max' } as never } },
     );
 
     const { keys, arguments: args } = evalOptions();
@@ -109,16 +118,16 @@ describe('StoryStateRepository (mocked Redis)', () => {
     expect(args[0]).toBe('tok');
     expect(JSON.parse(args[2])).toEqual([
       { set: [], del: [] },
-      { set: [['bob', JSON.stringify({ name: 'Max' })]], del: ['carol'] },
+      { set: [['c2', JSON.stringify({ name: 'Max' })]], del: [] },
       { set: [], del: [] },
     ]);
   });
 
-  it('deletes currentPanel/turnEndsAt when they go back to null', async () => {
+  it('deletes the nullable fields when they go back to null', async () => {
     redis.eval.mockResolvedValue(1);
     await repository.save(GAME.gameId, { key: 'lock', token: 'tok' }, { game: GAME });
     const [gameOps] = JSON.parse(evalOptions().arguments[2]) as { del: string[] }[];
-    expect(gameOps.del).toEqual(['currentPanel', 'turnEndsAt']);
+    expect(gameOps.del).toEqual(['currentPanel', 'turnEndsAt', 'abandonAt']);
   });
 
   it('throws when the lock was lost before writing', async () => {
@@ -164,14 +173,15 @@ describeWithRedis('StoryStateRepository (real Redis)', () => {
 
     await repository.withGameLock(gameId, (lock) =>
       repository.save(gameId, lock, {
-        game: { ...game, status: StoryStatus.CHARACTERS, currentPanel: 0 },
-        setCharacters: { alice: { name: 'Luna' } as never },
+        game: { ...game, status: StoryStatus.PLAYING, currentPanel: 0, abandonAt: 7 },
+        addCharacters: { c1: { name: 'Luna' } as never },
       }),
     );
     const snapshot = await repository.get(gameId);
-    expect(snapshot?.game.status).toBe(StoryStatus.CHARACTERS);
+    expect(snapshot?.game.status).toBe(StoryStatus.PLAYING);
+    expect(snapshot?.game.abandonAt).toBe(7);
     expect(snapshot?.game.currentPanel).toBe(0);
-    expect(snapshot?.characters).toEqual({ alice: { name: 'Luna' } });
+    expect(snapshot?.characters).toEqual({ c1: { name: 'Luna' } });
     expect(await client.pTTL(StoryStateRepository.charactersKey(gameId))).toBeGreaterThan(0);
 
     await expect(
@@ -184,11 +194,11 @@ describeWithRedis('StoryStateRepository (real Redis)', () => {
       ),
     ).rejects.toBeInstanceOf(StoryLockLostError);
 
-    await repository.withGameLock(gameId, (lock) =>
-      repository.save(gameId, lock, { game, deleteCharacters: ['alice'] }),
-    );
+    await repository.withGameLock(gameId, (lock) => repository.save(gameId, lock, { game }));
     const cleared = await repository.get(gameId);
     expect(cleared?.game.currentPanel).toBeNull();
-    expect(cleared?.characters).toEqual({});
+    expect(cleared?.game.abandonAt).toBeNull();
+    // El elenco solo crece.
+    expect(cleared?.characters).toEqual({ c1: { name: 'Luna' } });
   });
 });

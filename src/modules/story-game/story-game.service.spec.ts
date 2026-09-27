@@ -1,12 +1,15 @@
 import { Repository } from 'typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { User } from '@/db/entities';
 import { LockHandle } from '@/common/src/redis/redis-lock.service';
 import { UniqueNamesAdapter } from '@/common/src/unique-names/unique-names.adapter';
+import { Level } from '@/db/enum/question.enum';
 import { StoryGameService } from './story-game.service';
 import { StoryChanges, StoryStateRepository } from './story-state.repository';
 import { StoryError, StoryErrorCode } from './domain/story-game.errors';
-import { CharacterSheet, StoryGame, StorySnapshot, StoryStatus } from './domain/story-game.types';
-import { Level } from '@/db/enum/question.enum';
+import { StoryGame, StorySnapshot, StoryStatus } from './domain/story-game.types';
+import { LOBBY_ABANDON_DELAY_MS } from './story-game.config';
+import { STORY_CANCEL_EVENT, STORY_SCHEDULE_EVENT } from './queue/type';
 
 /**
  * Redis en memoria con la misma interfaz que StoryStateRepository. Guarda JSON
@@ -31,8 +34,7 @@ class InMemoryStoryStore {
   async save(gameId: string, _lock: LockHandle, changes: StoryChanges): Promise<void> {
     const snapshot = (await this.get(gameId))!;
     if (changes.game) snapshot.game = changes.game;
-    Object.assign(snapshot.characters, changes.setCharacters);
-    for (const userId of changes.deleteCharacters ?? []) delete snapshot.characters[userId];
+    Object.assign(snapshot.characters, changes.addCharacters);
     this.games.set(gameId, JSON.stringify(snapshot));
   }
 
@@ -57,26 +59,24 @@ class InMemoryStoryStore {
   }
 }
 
-const SHEET: CharacterSheet = {
-  name: 'Luna',
-  type: 'girl',
-  trait: 'curly red hair',
-  clothing: 'a yellow raincoat',
-  detail: 'carries a tiny robot',
-};
-
 async function expectStoryError(promise: Promise<unknown>, code: StoryErrorCode) {
   await expect(promise).rejects.toBeInstanceOf(StoryError);
   await promise.catch((error: StoryError) => expect(error.code).toBe(code));
 }
 
 describe('StoryGameService', () => {
+  const T0 = 1_800_000_000_000;
+  let now: number;
   let store: InMemoryStoryStore;
+  let events: { emit: jest.Mock; emitAsync: jest.Mock };
   let service: StoryGameService;
   let nextName: number;
 
   beforeEach(() => {
+    now = T0;
+    jest.spyOn(Date, 'now').mockImplementation(() => now);
     store = new InMemoryStoryStore();
+    events = { emit: jest.fn(), emitAsync: jest.fn().mockResolvedValue([]) };
     nextName = 0;
     const users = {
       findOne: jest.fn(({ where: { id } }: { where: { id: string } }) =>
@@ -87,8 +87,15 @@ describe('StoryGameService', () => {
       NamesGenerator: () => `game-${++nextName}`,
     } as UniqueNamesAdapter;
 
-    service = new StoryGameService(store as unknown as StoryStateRepository, users, uniqueNames);
+    service = new StoryGameService(
+      store as unknown as StoryStateRepository,
+      users,
+      uniqueNames,
+      events as unknown as EventEmitter2,
+    );
   });
+
+  afterEach(() => jest.restoreAllMocks());
 
   /** Partida con `ids` en orden de entrada; el primero es el anfitrión. */
   async function lobbyWith(...ids: string[]): Promise<string> {
@@ -99,15 +106,20 @@ describe('StoryGameService', () => {
 
   async function playingWith(...ids: string[]): Promise<string> {
     const gameId = await lobbyWith(...ids);
-    await service.startCharacters(gameId, ids[0]);
-    for (const id of ids) await service.createCharacter(gameId, id, SHEET);
     await service.startStory(gameId, ids[0]);
     return gameId;
   }
 
+  const gameOf = async (gameId: string) => (await service.getSnapshot(gameId)).game;
+  type EmitCall = [string, unknown];
+  const scheduled = () =>
+    (events.emitAsync.mock.calls as EmitCall[]).filter(([event]) => event === STORY_SCHEDULE_EVENT);
+  const cancelled = () =>
+    (events.emit.mock.calls as EmitCall[]).filter(([event]) => event === STORY_CANCEL_EVENT);
+
   describe('lobby', () => {
     it('creates a LOBBY game with the creator as host and the default config', async () => {
-      const { game } = await service.createGame('alice');
+      const { game, characters } = await service.createGame('alice');
 
       expect(game.status).toBe(StoryStatus.LOBBY);
       expect(game.hostId).toBe('alice');
@@ -118,6 +130,7 @@ describe('StoryGameService', () => {
         language: 'en-US',
       });
       expect(game.players.map((player) => player.userId)).toEqual(['alice']);
+      expect(characters).toEqual({});
       expect(await store.getUserGame('alice')).toBe(game.gameId);
     });
 
@@ -129,8 +142,7 @@ describe('StoryGameService', () => {
 
     it('keeps players in join order', async () => {
       const gameId = await lobbyWith('alice', 'bob', 'carol');
-      const snapshot = await service.getSnapshot(gameId);
-      expect(snapshot.game.players.map((player) => player.userId)).toEqual([
+      expect((await gameOf(gameId)).players.map((player) => player.userId)).toEqual([
         'alice',
         'bob',
         'carol',
@@ -153,9 +165,8 @@ describe('StoryGameService', () => {
       await expectStoryError(service.joinGame(gameId, 'p7'), 'GAME_FULL');
     });
 
-    it('rejects joining after the lobby', async () => {
-      const gameId = await lobbyWith('alice', 'bob');
-      await service.startCharacters(gameId, 'alice');
+    it('rejects new players after the story started', async () => {
+      const gameId = await playingWith('alice', 'bob');
       await expectStoryError(service.joinGame(gameId, 'carol'), 'INVALID_STATE');
     });
 
@@ -174,9 +185,9 @@ describe('StoryGameService', () => {
       await expectStoryError(service.joinGame(other, 'alice'), 'ALREADY_IN_GAME');
     });
 
-    it('lets a user start a new game once the previous one was abandoned', async () => {
-      const first = await lobbyWith('alice');
-      await service.disconnect(first, 'alice');
+    it('lets a user start a new game once they left the previous one', async () => {
+      const first = await lobbyWith('alice', 'bob');
+      await service.leaveGame(first, 'alice');
       const { game } = await service.createGame('alice');
       expect(game.gameId).not.toBe(first);
     });
@@ -202,9 +213,8 @@ describe('StoryGameService', () => {
       await expectStoryError(service.updateConfig(gameId, 'bob', { panelsCount: 8 }), 'NOT_HOST');
     });
 
-    it('rejects changes after the lobby', async () => {
-      const gameId = await lobbyWith('alice', 'bob');
-      await service.startCharacters(gameId, 'alice');
+    it('rejects changes after the story started', async () => {
+      const gameId = await playingWith('alice', 'bob');
       await expectStoryError(
         service.updateConfig(gameId, 'alice', { panelsCount: 8 }),
         'INVALID_STATE',
@@ -212,92 +222,90 @@ describe('StoryGameService', () => {
     });
   });
 
-  describe('startCharacters', () => {
-    it('moves the game to CHARACTERS', async () => {
+  describe('kickPlayer', () => {
+    it('removes the player and clears their active game', async () => {
+      const gameId = await lobbyWith('alice', 'bob', 'carol');
+      const { game } = await service.kickPlayer(gameId, 'alice', 'bob');
+
+      expect(game.players.map((player) => player.userId)).toEqual(['alice', 'carol']);
+      expect(await store.getUserGame('bob')).toBeNull();
+    });
+
+    it('lets the kicked player join another game right away', async () => {
       const gameId = await lobbyWith('alice', 'bob');
-      const { game } = await service.startCharacters(gameId, 'alice');
-      expect(game.status).toBe(StoryStatus.CHARACTERS);
+      await service.kickPlayer(gameId, 'alice', 'bob');
+      await expect(service.createGame('bob')).resolves.toBeDefined();
     });
 
     it('rejects a non-host', async () => {
-      const gameId = await lobbyWith('alice', 'bob');
-      await expectStoryError(service.startCharacters(gameId, 'bob'), 'NOT_HOST');
+      const gameId = await lobbyWith('alice', 'bob', 'carol');
+      await expectStoryError(service.kickPlayer(gameId, 'bob', 'carol'), 'NOT_HOST');
     });
 
-    it('needs at least 2 players', async () => {
-      const gameId = await lobbyWith('alice');
-      await expectStoryError(service.startCharacters(gameId, 'alice'), 'NOT_ENOUGH_PLAYERS');
-    });
-  });
-
-  describe('characters', () => {
-    it('stores one sheet per player and replaces it if created again', async () => {
+    it('rejects kicking yourself', async () => {
       const gameId = await lobbyWith('alice', 'bob');
-      await service.startCharacters(gameId, 'alice');
-      await service.createCharacter(gameId, 'bob', SHEET);
-      const { characters } = await service.createCharacter(gameId, 'bob', {
-        ...SHEET,
-        name: 'Max',
-      });
-
-      expect(Object.keys(characters)).toEqual(['bob']);
-      expect(characters.bob.name).toBe('Max');
+      await expectStoryError(service.kickPlayer(gameId, 'alice', 'alice'), 'CANNOT_KICK_SELF');
     });
 
-    it('only keeps the sheet fields', async () => {
+    it('rejects kicking someone who is not in the game', async () => {
       const gameId = await lobbyWith('alice', 'bob');
-      await service.startCharacters(gameId, 'alice');
-      const { characters } = await service.createCharacter(gameId, 'bob', {
-        ...SHEET,
-        extra: 'x',
-      } as CharacterSheet);
-      expect(characters.bob).toEqual(SHEET);
+      await expectStoryError(service.kickPlayer(gameId, 'alice', 'zoe'), 'NOT_A_PLAYER');
     });
 
-    it('rejects characters outside the CHARACTERS step', async () => {
-      const gameId = await lobbyWith('alice', 'bob');
-      await expectStoryError(service.createCharacter(gameId, 'bob', SHEET), 'INVALID_STATE');
-    });
-
-    it('rejects someone who is not a player', async () => {
-      const gameId = await lobbyWith('alice', 'bob');
-      await service.startCharacters(gameId, 'alice');
-      await expectStoryError(service.createCharacter(gameId, 'carol', SHEET), 'NOT_A_PLAYER');
+    it('only works in the lobby', async () => {
+      const gameId = await playingWith('alice', 'bob');
+      await expectStoryError(service.kickPlayer(gameId, 'alice', 'bob'), 'INVALID_STATE');
     });
   });
 
   describe('startStory', () => {
-    it('cannot start while a player has no character', async () => {
-      const gameId = await lobbyWith('alice', 'bob');
-      await service.startCharacters(gameId, 'alice');
-      await service.createCharacter(gameId, 'alice', SHEET);
-
-      await expectStoryError(service.startStory(gameId, 'alice'), 'CHARACTERS_MISSING');
-      expect((await service.getSnapshot(gameId)).game.status).toBe(StoryStatus.CHARACTERS);
-    });
-
-    it('rejects a non-host', async () => {
-      const gameId = await lobbyWith('alice', 'bob');
-      await service.startCharacters(gameId, 'alice');
-      await service.createCharacter(gameId, 'alice', SHEET);
-      await service.createCharacter(gameId, 'bob', SHEET);
-      await expectStoryError(service.startStory(gameId, 'bob'), 'NOT_HOST');
-    });
-
-    it('moves to PLAYING at panel 0 when everyone has a character', async () => {
+    it('moves from LOBBY to PLAYING at panel 0', async () => {
       const gameId = await playingWith('alice', 'bob');
-      const { game } = await service.getSnapshot(gameId);
+      const game = await gameOf(gameId);
       expect(game.status).toBe(StoryStatus.PLAYING);
       expect(game.currentPanel).toBe(0);
     });
 
-    it('cannot skip the characters step', async () => {
+    it('rejects a non-host', async () => {
       const gameId = await lobbyWith('alice', 'bob');
+      await expectStoryError(service.startStory(gameId, 'bob'), 'NOT_HOST');
+    });
+
+    it('needs at least 2 connected players', async () => {
+      const gameId = await lobbyWith('alice', 'bob');
+      await service.disconnect(gameId, 'bob');
+      await expectStoryError(service.startStory(gameId, 'alice'), 'NOT_ENOUGH_PLAYERS');
+    });
+
+    it('needs at least one panel per player', async () => {
+      const gameId = await lobbyWith('p1', 'p2', 'p3', 'p4', 'p5');
+      await service.updateConfig(gameId, 'p1', { panelsCount: 4 });
+
+      await expectStoryError(service.startStory(gameId, 'p1'), 'NOT_ENOUGH_PANELS');
+      expect((await gameOf(gameId)).status).toBe(StoryStatus.LOBBY);
+    });
+
+    it('counts disconnected lobby players for the panel check (they get turns too)', async () => {
+      const gameId = await lobbyWith('p1', 'p2', 'p3', 'p4', 'p5');
+      await service.updateConfig(gameId, 'p1', { panelsCount: 4 });
+      await service.disconnect(gameId, 'p5');
+      await expectStoryError(service.startStory(gameId, 'p1'), 'NOT_ENOUGH_PANELS');
+    });
+
+    it('accepts panelsCount equal to the number of players', async () => {
+      const gameId = await lobbyWith('p1', 'p2', 'p3', 'p4');
+      await service.updateConfig(gameId, 'p1', { panelsCount: 4 });
+      const { game } = await service.startStory(gameId, 'p1');
+      expect(game.status).toBe(StoryStatus.PLAYING);
+    });
+
+    it('cannot start twice', async () => {
+      const gameId = await playingWith('alice', 'bob');
       await expectStoryError(service.startStory(gameId, 'alice'), 'INVALID_STATE');
     });
   });
 
-  describe('host hand-over and abandonment', () => {
+  describe('host hand-over', () => {
     it('passes the host to the next player in order when the host disconnects', async () => {
       const gameId = await lobbyWith('alice', 'bob', 'carol');
       const snapshot = await service.disconnect(gameId, 'alice');
@@ -320,20 +328,20 @@ describe('StoryGameService', () => {
       expect(snapshot?.game.players[0].connected).toBe(true);
     });
 
+    it('gives the host to whoever reconnects first after everyone dropped', async () => {
+      const gameId = await lobbyWith('alice', 'bob');
+      await service.disconnect(gameId, 'bob');
+      await service.disconnect(gameId, 'alice'); // nadie conectado: alice sigue de anfitriona
+      const snapshot = await service.resume('bob');
+      expect(snapshot?.game.hostId).toBe('bob');
+    });
+
     it('passes the host on when the host leaves the lobby', async () => {
       const gameId = await lobbyWith('alice', 'bob', 'carol');
       const { game } = await service.leaveGame(gameId, 'alice');
       expect(game.hostId).toBe('bob');
       expect(game.players.map((player) => player.userId)).toEqual(['bob', 'carol']);
       expect(await store.getUserGame('alice')).toBeNull();
-    });
-
-    it('removes the character of a player who leaves during CHARACTERS', async () => {
-      const gameId = await lobbyWith('alice', 'bob', 'carol');
-      await service.startCharacters(gameId, 'alice');
-      await service.createCharacter(gameId, 'carol', SHEET);
-      const { characters } = await service.leaveGame(gameId, 'carol');
-      expect(characters).toEqual({});
     });
 
     it('keeps a player who leaves during PLAYING in the turn order', async () => {
@@ -346,23 +354,103 @@ describe('StoryGameService', () => {
       ]);
     });
 
-    it('abandons the game when nobody is connected', async () => {
-      const gameId = await playingWith('alice', 'bob');
-      await service.disconnect(gameId, 'bob');
-      const snapshot = await service.disconnect(gameId, 'alice');
-      expect(snapshot?.game.status).toBe(StoryStatus.ABANDONED);
-    });
-
-    it('abandons the game when the last player leaves', async () => {
-      const gameId = await lobbyWith('alice');
-      const { game } = await service.leaveGame(gameId, 'alice');
-      expect(game.status).toBe(StoryStatus.ABANDONED);
-    });
-
     it('ignores the disconnect of someone who already left', async () => {
       const gameId = await lobbyWith('alice', 'bob');
       await service.leaveGame(gameId, 'bob');
       expect(await service.disconnect(gameId, 'bob')).toBeNull();
+    });
+  });
+
+  describe('abandonment', () => {
+    it('waits 60 s before abandoning an empty lobby and schedules the job', async () => {
+      const gameId = await lobbyWith('alice', 'bob');
+      await service.disconnect(gameId, 'bob');
+      const snapshot = await service.disconnect(gameId, 'alice');
+
+      expect(snapshot?.game.status).toBe(StoryStatus.LOBBY);
+      expect(snapshot?.game.abandonAt).toBe(T0 + LOBBY_ABANDON_DELAY_MS);
+      expect(scheduled()).toEqual([
+        [
+          STORY_SCHEDULE_EVENT,
+          { gameId, kind: 'abandon-lobby', seq: 1, dueAt: T0 + LOBBY_ABANDON_DELAY_MS },
+        ],
+      ]);
+
+      now += LOBBY_ABANDON_DELAY_MS;
+      await service.abandonIdleLobby(gameId, 1);
+      expect((await gameOf(gameId)).status).toBe(StoryStatus.ABANDONED);
+    });
+
+    it('cancels the pending abandon when someone reconnects', async () => {
+      const gameId = await lobbyWith('alice');
+      await service.disconnect(gameId, 'alice');
+
+      now += 30_000;
+      const snapshot = await service.resume('alice');
+      expect(snapshot?.game.abandonAt).toBeNull();
+      expect(cancelled()).toEqual([
+        [
+          STORY_CANCEL_EVENT,
+          { gameId, kind: 'abandon-lobby', seq: 1, dueAt: T0 + LOBBY_ABANDON_DELAY_MS },
+        ],
+      ]);
+
+      // Aunque la tarea corra igual (no se pudo borrar), está obsoleta.
+      now = T0 + LOBBY_ABANDON_DELAY_MS;
+      await service.abandonIdleLobby(gameId, 1);
+      expect((await gameOf(gameId)).status).toBe(StoryStatus.LOBBY);
+    });
+
+    it('ignores an old job when the lobby emptied again later', async () => {
+      const gameId = await lobbyWith('alice');
+      await service.disconnect(gameId, 'alice'); // seq 1
+      await service.resume('alice');
+      now += 10_000;
+      await service.disconnect(gameId, 'alice'); // seq 2, vence más tarde
+
+      now = T0 + LOBBY_ABANDON_DELAY_MS;
+      await service.abandonIdleLobby(gameId, 1);
+      expect((await gameOf(gameId)).status).toBe(StoryStatus.LOBBY);
+
+      now = T0 + 10_000 + LOBBY_ABANDON_DELAY_MS;
+      await service.abandonIdleLobby(gameId, 2);
+      expect((await gameOf(gameId)).status).toBe(StoryStatus.ABANDONED);
+    });
+
+    it('a new player joining an empty lobby cancels the abandon and becomes host', async () => {
+      const gameId = await lobbyWith('alice');
+      await service.disconnect(gameId, 'alice');
+      const { game } = await service.joinGame(gameId, 'bob');
+
+      expect(game.abandonAt).toBeNull();
+      expect(game.hostId).toBe('bob');
+    });
+
+    it('abandons right away when the last lobby player leaves', async () => {
+      const gameId = await lobbyWith('alice');
+      const { game } = await service.leaveGame(gameId, 'alice');
+      expect(game.status).toBe(StoryStatus.ABANDONED);
+      expect(scheduled()).toHaveLength(0);
+    });
+
+    it('waits when the last connected player leaves but disconnected ones remain', async () => {
+      const gameId = await lobbyWith('alice', 'bob');
+      await service.disconnect(gameId, 'bob');
+      const { game } = await service.leaveGame(gameId, 'alice');
+      expect(game.status).toBe(StoryStatus.LOBBY);
+      expect(scheduled()).toHaveLength(1);
+    });
+
+    it('abandons a PLAYING game right away when nobody is connected', async () => {
+      const gameId = await playingWith('alice', 'bob');
+      await service.disconnect(gameId, 'bob');
+      const snapshot = await service.disconnect(gameId, 'alice');
+      expect(snapshot?.game.status).toBe(StoryStatus.ABANDONED);
+      expect(scheduled()).toHaveLength(0);
+    });
+
+    it('ignores the abandon job of a game that expired', async () => {
+      await expect(service.abandonIdleLobby('expired', 1)).resolves.toBeUndefined();
     });
   });
 
@@ -372,7 +460,8 @@ describe('StoryGameService', () => {
     });
 
     it('clears the reference to an abandoned game', async () => {
-      const gameId = await lobbyWith('alice');
+      const gameId = await playingWith('alice', 'bob');
+      await service.disconnect(gameId, 'bob');
       await service.disconnect(gameId, 'alice');
       expect(await service.resume('alice')).toBeNull();
       expect(await store.getUserGame('alice')).toBeNull();
@@ -388,7 +477,6 @@ describe('StoryGameService', () => {
   it('serializes concurrent joins so nobody is lost', async () => {
     const gameId = await lobbyWith('p1');
     await Promise.all(['p2', 'p3', 'p4', 'p5', 'p6'].map((id) => service.joinGame(gameId, id)));
-    const { game } = await service.getSnapshot(gameId);
-    expect(game.players).toHaveLength(6);
+    expect((await gameOf(gameId)).players).toHaveLength(6);
   });
 });

@@ -26,17 +26,23 @@ export const STORY_DEFAULT_CONFIG = {
   language: 'en-US' as StoryLanguage,
 };
 
+/** Cuánto espera un lobby sin nadie conectado antes de pasar a ABANDONED. */
+export const LOBBY_ABANDON_DELAY_MS = 60_000;
+
 /** Revisiones de IA que puede usar un jugador en su viñeta. */
 export const MAX_REVIEW_ATTEMPTS = 2;
 export const MAX_CHARS_PER_PANEL = 320;
 export const MIN_WORDS_PER_PANEL = 8;
 export const MAX_CHARS_PER_SCENE = 200;
 
+/** Personajes: se crean durante los turnos (Fase 2). */
+export const MAX_CHARACTERS_PER_STORY = 6;
+export const MAX_NEW_CHARACTERS_PER_PANEL = 2;
+export const MAX_CHARACTERS_PER_PANEL = 3;
+
 /** Largo máximo de cada campo de la ficha de personaje. */
 export const CHARACTER_LIMITS = {
   name: 30,
-  type: 30,
-  trait: 60,
-  clothing: 60,
-  detail: 60,
+  kind: 30,
+  description: 100,
 } as const;

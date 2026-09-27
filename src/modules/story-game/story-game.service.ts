@@ -1,4 +1,5 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '@/db/entities';
@@ -6,21 +7,27 @@ import { UniqueNamesAdapter } from '@/common/src/unique-names/unique-names.adapt
 import { StoryChanges, StoryStateRepository } from './story-state.repository';
 import { StoryError } from './domain/story-game.errors';
 import {
-  CharacterSheet,
   STORY_ENDED_STATUSES,
   StoryConfig,
   StoryGame,
   StorySnapshot,
   StoryStatus,
 } from './domain/story-game.types';
-import { STORY_DEFAULT_CONFIG, STORY_MAX_PLAYERS, STORY_MIN_PLAYERS } from './story-game.config';
+import {
+  LOBBY_ABANDON_DELAY_MS,
+  STORY_DEFAULT_CONFIG,
+  STORY_MAX_PLAYERS,
+  STORY_MIN_PLAYERS,
+} from './story-game.config';
+import { STORY_CANCEL_EVENT, STORY_SCHEDULE_EVENT, StoryJob } from './queue/type';
 
 const MAX_GAME_ID_ATTEMPTS = 5;
 
 /**
  * Máquina de estados y reglas del modo Historieta. Todo cambio de estado pasa
  * por `mutate`: lock de la partida → leer → validar/modificar → escritura
- * atómica con fencing. El gateway solo traduce eventos y difunde el resultado.
+ * atómica con fencing → programar/cancelar tareas diferidas. El gateway solo
+ * traduce eventos y difunde el resultado.
  */
 @Injectable()
 export class StoryGameService {
@@ -31,6 +38,7 @@ export class StoryGameService {
     @InjectRepository(User)
     private readonly users: Repository<User>,
     private readonly uniqueNames: UniqueNamesAdapter,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   async createGame(userId: string): Promise<StorySnapshot> {
@@ -49,6 +57,8 @@ export class StoryGameService {
         ],
         currentPanel: null,
         turnEndsAt: null,
+        abandonAt: null,
+        abandonSeq: 0,
         createdAt: now,
       };
 
@@ -72,9 +82,14 @@ export class StoryGameService {
     await this.assertNotInAnotherGame(userId, gameId);
 
     const snapshot = await this.mutate(gameId, ({ game }) => {
+      if (STORY_ENDED_STATUSES.includes(game.status)) {
+        throw StoryError.invalidState('join', game.status);
+      }
+
       const existing = game.players.find((player) => player.userId === userId);
       if (existing && !existing.left) {
         existing.connected = true;
+        this.onPlayerConnected(game);
         return { game };
       }
 
@@ -90,6 +105,7 @@ export class StoryGameService {
         left: false,
         joinedAt: Date.now(),
       });
+      this.onPlayerConnected(game);
       return { game };
     });
 
@@ -116,50 +132,47 @@ export class StoryGameService {
     });
   }
 
-  async startCharacters(gameId: string, userId: string): Promise<StorySnapshot> {
+  /** El anfitrión saca a un jugador del lobby. El gateway le avisa con `KICKED`. */
+  async kickPlayer(gameId: string, hostId: string, targetId: string): Promise<StorySnapshot> {
+    const snapshot = await this.mutate(gameId, ({ game }) => {
+      this.assertHost(game, hostId);
+      if (game.status !== StoryStatus.LOBBY) {
+        throw StoryError.invalidState('kick a player', game.status);
+      }
+      if (targetId === hostId) {
+        throw new StoryError('CANNOT_KICK_SELF', 'The host cannot kick themselves');
+      }
+      this.assertActivePlayer(game, targetId);
+
+      game.players = game.players.filter((player) => player.userId !== targetId);
+      return { game };
+    });
+
+    await this.store.clearUserGame(targetId, gameId);
+    return snapshot;
+  }
+
+  /** LOBBY → PLAYING (solo anfitrión). La apertura del primer turno llega en la Fase 2. */
+  async startStory(gameId: string, userId: string): Promise<StorySnapshot> {
     return this.mutate(gameId, ({ game }) => {
       this.assertHost(game, userId);
       if (game.status !== StoryStatus.LOBBY) {
-        throw StoryError.invalidState('start the characters step', game.status);
-      }
-      this.assertEnoughPlayers(game);
-
-      game.status = StoryStatus.CHARACTERS;
-      return { game };
-    });
-  }
-
-  /** Crea (o reemplaza, mientras dure el paso de personajes) la ficha del jugador. */
-  async createCharacter(
-    gameId: string,
-    userId: string,
-    sheet: CharacterSheet,
-  ): Promise<StorySnapshot> {
-    return this.mutate(gameId, ({ game }) => {
-      if (game.status !== StoryStatus.CHARACTERS) {
-        throw StoryError.invalidState('create a character', game.status);
-      }
-      this.assertActivePlayer(game, userId);
-
-      const { name, type, trait, clothing, detail } = sheet;
-      return { setCharacters: { [userId]: { name, type, trait, clothing, detail } } };
-    });
-  }
-
-  /** CHARACTERS → PLAYING. Solo el anfitrión, y todos los jugadores con personaje. */
-  async startStory(gameId: string, userId: string): Promise<StorySnapshot> {
-    return this.mutate(gameId, ({ game, characters }) => {
-      this.assertHost(game, userId);
-      if (game.status !== StoryStatus.CHARACTERS) {
         throw StoryError.invalidState('start the story', game.status);
       }
-      this.assertEnoughPlayers(game);
 
-      const missing = game.players.filter((player) => !player.left && !characters[player.userId]);
-      if (missing.length > 0) {
+      const connected = game.players.filter((player) => player.connected && !player.left);
+      if (connected.length < STORY_MIN_PLAYERS) {
         throw new StoryError(
-          'CHARACTERS_MISSING',
-          `Waiting for characters from: ${missing.map((player) => player.username).join(', ')}`,
+          'NOT_ENOUGH_PLAYERS',
+          `At least ${STORY_MIN_PLAYERS} connected players are needed`,
+          HttpStatus.CONFLICT,
+        );
+      }
+      // Todos escriben al menos una viñeta.
+      if (game.config.panelsCount < game.players.length) {
+        throw new StoryError(
+          'NOT_ENOUGH_PANELS',
+          `The story needs at least one panel per player (${game.players.length})`,
           HttpStatus.CONFLICT,
         );
       }
@@ -171,8 +184,8 @@ export class StoryGameService {
   }
 
   /**
-   * Salir de la partida. En LOBBY/CHARACTERS el jugador se quita de la lista;
-   * después se marca `left` y se queda, porque el orden define los turnos.
+   * Salir de la partida. En LOBBY el jugador se quita de la lista; después se
+   * marca `left` y se queda, porque el orden define los turnos.
    */
   async leaveGame(gameId: string, userId: string): Promise<StorySnapshot> {
     const snapshot = await this.mutate(gameId, ({ game }) => {
@@ -180,16 +193,14 @@ export class StoryGameService {
       const player = this.assertActivePlayer(game, userId);
 
       this.handOverHost(game, userId);
-      const changes: StoryChanges = { game };
-      if (game.status === StoryStatus.LOBBY || game.status === StoryStatus.CHARACTERS) {
+      if (game.status === StoryStatus.LOBBY) {
         game.players = game.players.filter((other) => other.userId !== userId);
-        changes.deleteCharacters = [userId];
       } else {
         player.left = true;
         player.connected = false;
       }
-      this.abandonIfEmpty(game);
-      return changes;
+      this.onPlayerGone(game);
+      return { game };
     });
 
     await this.store.clearUserGame(userId, gameId);
@@ -209,7 +220,7 @@ export class StoryGameService {
 
       player.connected = false;
       this.handOverHost(game, userId);
-      this.abandonIfEmpty(game);
+      this.onPlayerGone(game);
       changed = true;
       return { game };
     });
@@ -231,6 +242,7 @@ export class StoryGameService {
         active = true;
         if (player.connected) return null;
         player.connected = true;
+        this.onPlayerConnected(game);
         return { game };
       });
       if (active) return snapshot;
@@ -243,6 +255,29 @@ export class StoryGameService {
     return null;
   }
 
+  /**
+   * Tarea diferida `abandon-lobby`: el lobby siguió vacío durante
+   * LOBBY_ABANDON_DELAY_MS. Si alguien volvió (o el lobby se vació otra vez
+   * después, con otro `abandonSeq`), la tarea está obsoleta y no hace nada.
+   */
+  async abandonIdleLobby(gameId: string, seq: number): Promise<void> {
+    try {
+      await this.mutate(gameId, ({ game }) => {
+        if (game.status !== StoryStatus.LOBBY) return null;
+        if (game.abandonAt === null || game.abandonSeq !== seq) return null;
+        if (game.players.some((player) => player.connected && !player.left)) return null;
+
+        game.status = StoryStatus.ABANDONED;
+        game.abandonAt = null;
+        this.logger.log(`story ${gameId} abandoned (empty lobby)`);
+        return { game };
+      });
+    } catch (error) {
+      // Expiró por TTL: no queda nada que abandonar.
+      if (!(error instanceof StoryError && error.code === 'GAME_NOT_FOUND')) throw error;
+    }
+  }
+
   async getSnapshot(gameId: string): Promise<StorySnapshot> {
     const snapshot = await this.store.get(gameId);
     if (!snapshot) throw StoryError.gameNotFound(gameId);
@@ -250,24 +285,79 @@ export class StoryGameService {
   }
 
   /**
-   * Lock → leer → `fn` valida y modifica la copia leída → escritura atómica.
-   * `fn` devuelve los cambios a guardar, o null si no hay nada que guardar.
+   * Lock → leer → `fn` valida y modifica la copia leída → escritura atómica →
+   * sincronizar tareas diferidas. `fn` devuelve los cambios a guardar, o null
+   * si no hay nada que guardar.
    */
-  private mutate(
+  private async mutate(
     gameId: string,
     fn: (snapshot: StorySnapshot) => StoryChanges | null,
   ): Promise<StorySnapshot> {
-    return this.store.withGameLock(gameId, async (lock) => {
+    const { previous, next } = await this.store.withGameLock(gameId, async (lock) => {
       const snapshot = await this.getSnapshot(gameId);
+      const previous = structuredClone(snapshot.game);
       const changes = fn(snapshot);
-      if (!changes) return snapshot;
+      if (!changes) return { previous, next: snapshot };
 
       await this.store.save(gameId, lock, changes);
-
-      const characters = { ...snapshot.characters, ...changes.setCharacters };
-      for (const userId of changes.deleteCharacters ?? []) delete characters[userId];
-      return { game: changes.game ?? snapshot.game, characters };
+      const next: StorySnapshot = {
+        game: changes.game ?? snapshot.game,
+        characters: { ...snapshot.characters, ...changes.addCharacters },
+      };
+      return { previous, next };
     });
+
+    await this.syncLobbyTimer(previous, next.game);
+    return next;
+  }
+
+  /** Programa la tarea de abandono si el lobby quedó vacío y borra la anterior si ya no vale. */
+  private async syncLobbyTimer(previous: StoryGame, next: StoryGame) {
+    const job = (game: StoryGame): StoryJob | null =>
+      game.abandonAt === null
+        ? null
+        : {
+            gameId: game.gameId,
+            kind: 'abandon-lobby',
+            seq: game.abandonSeq,
+            dueAt: game.abandonAt,
+          };
+    const before = job(previous);
+    const after = job(next);
+    if (before?.seq === after?.seq && before?.dueAt === after?.dueAt) return;
+
+    if (before) this.eventEmitter.emit(STORY_CANCEL_EVENT, before);
+    // emitAsync espera al listener: si no se puede programar, el error sube.
+    if (after) await this.eventEmitter.emitAsync(STORY_SCHEDULE_EVENT, after);
+  }
+
+  /** Alguien (re)conectó: el lobby deja de estar vacío y el anfitrión tiene que estar conectado. */
+  private onPlayerConnected(game: StoryGame) {
+    game.abandonAt = null;
+
+    const host = game.players.find((player) => player.userId === game.hostId);
+    if (!host || !host.connected || host.left) this.handOverHost(game, game.hostId);
+  }
+
+  /**
+   * Se fue o se desconectó alguien. Sin nadie conectado: en LOBBY se espera
+   * LOBBY_ABANDON_DELAY_MS (pueden volver); en el resto, o si el lobby quedó
+   * sin jugadores, la partida se abandona.
+   */
+  private onPlayerGone(game: StoryGame) {
+    if (game.players.some((player) => player.connected && !player.left)) return;
+
+    if (game.status === StoryStatus.LOBBY && game.players.length > 0) {
+      if (game.abandonAt === null) {
+        game.abandonSeq += 1;
+        game.abandonAt = Date.now() + LOBBY_ABANDON_DELAY_MS;
+      }
+      return;
+    }
+
+    game.status = StoryStatus.ABANDONED;
+    game.abandonAt = null;
+    this.logger.log(`story ${game.gameId} abandoned`);
   }
 
   private async findUser(userId: string): Promise<User> {
@@ -307,38 +397,22 @@ export class StoryGameService {
     return player;
   }
 
-  private assertEnoughPlayers(game: StoryGame) {
-    const active = game.players.filter((player) => !player.left).length;
-    if (active < STORY_MIN_PLAYERS) {
-      throw new StoryError(
-        'NOT_ENOUGH_PLAYERS',
-        `At least ${STORY_MIN_PLAYERS} players are needed`,
-        HttpStatus.CONFLICT,
-      );
-    }
-  }
-
-  /** Si `userId` es el anfitrión, pasa al siguiente jugador conectado en orden de entrada. */
-  private handOverHost(game: StoryGame, userId: string) {
-    if (game.hostId !== userId) return;
+  /**
+   * Pasa el anfitrión de `fromUserId` al siguiente jugador conectado en orden de
+   * entrada (circular). Si no hay nadie conectado, no cambia.
+   */
+  private handOverHost(game: StoryGame, fromUserId: string) {
+    if (game.hostId !== fromUserId) return;
 
     const count = game.players.length;
-    const from = game.players.findIndex((player) => player.userId === userId);
-    for (let step = 1; step < count; step++) {
+    const from = game.players.findIndex((player) => player.userId === fromUserId);
+    for (let step = 1; step <= count; step++) {
       const candidate = game.players[(from + step) % count];
-      if (candidate.connected && !candidate.left) {
+      if (candidate.userId !== fromUserId && candidate.connected && !candidate.left) {
         game.hostId = candidate.userId;
-        this.logger.debug(`story ${game.gameId}: host ${userId} → ${candidate.userId}`);
+        this.logger.debug(`story ${game.gameId}: host ${fromUserId} → ${candidate.userId}`);
         return;
       }
-    }
-    // Nadie más conectado: la partida queda abandonada (abandonIfEmpty).
-  }
-
-  private abandonIfEmpty(game: StoryGame) {
-    if (!game.players.some((player) => player.connected && !player.left)) {
-      game.status = StoryStatus.ABANDONED;
-      this.logger.log(`story ${game.gameId} abandoned`);
     }
   }
 }
