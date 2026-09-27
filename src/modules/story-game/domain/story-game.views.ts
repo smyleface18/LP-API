@@ -1,8 +1,9 @@
 import { CharacterCorrection, Correction } from '@/modules/language-review/language-review.types';
 import { MAX_REVIEW_ATTEMPTS } from '../story-game.config';
 import { StoryPanelSummary } from './story-game.events';
-import { castOf, storySoFar } from './story-turns';
+import { authorStatusOf, castOf, storySoFar } from './story-turns';
 import {
+  AuthorStatus,
   DraftInput,
   PanelDraft,
   StoryCharacter,
@@ -67,6 +68,7 @@ export interface TurnView {
   panelOrder: number;
   authorId: string;
   endsAt: number;
+  authorStatus: AuthorStatus;
 }
 
 /** Respuesta de `getGameState` y evento `gameState` al reconectarse. */
@@ -96,7 +98,11 @@ export function toOwnDraftView(draft: PanelDraft): OwnDraftView {
   };
 }
 
-export function toGameStateView(snapshot: StorySnapshot, userId: string): GameStateView {
+export function toGameStateView(
+  snapshot: StorySnapshot,
+  userId: string,
+  now = Date.now(),
+): GameStateView {
   const { game } = snapshot;
   const panel = game.currentPanel === null ? undefined : snapshot.panels[game.currentPanel];
   const openPanel =
@@ -106,7 +112,12 @@ export function toGameStateView(snapshot: StorySnapshot, userId: string): GameSt
     lobby: toLobbyView(snapshot),
     turn:
       openPanel && game.turnEndsAt !== null
-        ? { panelOrder: openPanel.order, authorId: openPanel.authorId, endsAt: game.turnEndsAt }
+        ? {
+            panelOrder: openPanel.order,
+            authorId: openPanel.authorId,
+            endsAt: game.turnEndsAt,
+            authorStatus: authorStatusOf(openPanel, now),
+          }
         : null,
     storySoFar: storySoFar(snapshot),
     cast: castOf(snapshot),

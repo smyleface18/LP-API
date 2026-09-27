@@ -5,12 +5,14 @@ import {
   MAX_NEW_CHARACTERS_PER_PANEL,
   MIN_WORDS_PER_PANEL,
   OUT_OF_TIME_TEXT,
+  REVIEW_STALE_MS,
 } from '../story-game.config';
 import { StoryError } from './story-game.errors';
 import { countWords } from './story-text';
 import { calculatePanelScore } from './story-score';
 import { PanelConfirmedEvent, StoryPanelSummary } from './story-game.events';
 import {
+  AuthorStatus,
   CharacterSheet,
   DraftInput,
   PanelConfirmedBy,
@@ -71,6 +73,7 @@ function freshPanel(order: number, authorId: string): PanelState {
     characterIds: [],
     score: null,
     confirmedBy: null,
+    reactions: {},
   };
 }
 
@@ -103,7 +106,18 @@ export function storySoFar(snapshot: StorySnapshot): StoryPanelSummary[] {
     finalText: panel.finalText ?? '',
     scene: panel.scene ?? '',
     characterIds: panel.characterIds,
+    reactions: panel.reactions ?? {},
   }));
+}
+
+/**
+ * Qué está haciendo el autor de una viñeta abierta: esperando la revisión (si
+ * no se dio por perdida), corrigiendo (ya tiene al menos un borrador revisado)
+ * o escribiendo.
+ */
+export function authorStatusOf(panel: PanelState, now: number): AuthorStatus {
+  if (panel.reviewing && now - panel.reviewing.startedAt < REVIEW_STALE_MS) return 'reviewing';
+  return panel.drafts.length > 0 ? 'correcting' : 'writing';
 }
 
 /** Elenco en el orden en que se fue creando. */

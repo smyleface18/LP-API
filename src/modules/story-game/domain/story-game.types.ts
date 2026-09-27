@@ -1,4 +1,9 @@
-import { StoryLanguage, StoryLevel, StoryTurnDurationSec } from '../story-game.config';
+import {
+  StoryLanguage,
+  StoryLevel,
+  StoryReaction,
+  StoryTurnDurationSec,
+} from '../story-game.config';
 import { LanguageReview } from '@/modules/language-review/language-review.types';
 
 /**
@@ -23,7 +28,15 @@ export const STORY_ABANDONABLE_STATUSES: readonly StoryStatus[] = [
   StoryStatus.PLAYING,
 ];
 
-/** Estados en los que la partida ya no admite cambios. */
+/** Estados en los que se puede reaccionar a las viñetas confirmadas. */
+export const STORY_REACTABLE_STATUSES: readonly StoryStatus[] = [
+  StoryStatus.PLAYING,
+  StoryStatus.PROCESSING,
+  StoryStatus.REVIEW,
+  StoryStatus.FINISHED,
+];
+
+/** Estados en los que la partida ya no cambia (salvo las reacciones en FINISHED). */
 export const STORY_ENDED_STATUSES: readonly StoryStatus[] = [
   StoryStatus.FINISHED,
   StoryStatus.ABANDONED,
@@ -34,6 +47,11 @@ export interface StoryConfig {
   turnDurationSec: StoryTurnDurationSec;
   level: StoryLevel;
   language: StoryLanguage;
+  /**
+   * Los demás jugadores ven cada borrador revisado del autor, con sus
+   * correcciones (`panelDraftReviewed`), mientras la viñeta está abierta.
+   */
+  shareDrafts: boolean;
 }
 
 export interface StoryPlayer {
@@ -146,7 +164,12 @@ export interface PanelState {
   /** Se calcula al cerrarse; null mientras está abierta. */
   score: PanelScore | null;
   confirmedBy: PanelConfirmedBy | null;
+  /** Reacciones a la viñeta confirmada: userId → emoji (una por jugador). */
+  reactions: Record<string, StoryReaction>;
 }
+
+/** Qué está haciendo el autor del turno en curso (`authorStatus`). */
+export type AuthorStatus = 'writing' | 'reviewing' | 'correcting';
 
 /** Estado leído de Redis: partida, elenco (characterId → personaje) y viñetas (order → viñeta). */
 export interface StorySnapshot {

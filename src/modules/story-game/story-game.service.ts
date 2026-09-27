@@ -19,6 +19,7 @@ import {
   PanelState,
   STORY_ABANDONABLE_STATUSES,
   STORY_ENDED_STATUSES,
+  STORY_REACTABLE_STATUSES,
   StoryConfig,
   StoryGame,
   StorySnapshot,
@@ -26,6 +27,7 @@ import {
 } from './domain/story-game.types';
 import {
   authorFor,
+  authorStatusOf,
   castOf,
   closedPanels,
   confirmPanel,
@@ -46,6 +48,7 @@ import {
   STORY_DEFAULT_CONFIG,
   STORY_MAX_PLAYERS,
   STORY_MIN_PLAYERS,
+  StoryReaction,
 } from './story-game.config';
 import { STORY_CANCEL_EVENT, STORY_SCHEDULE_EVENT, StoryJob, storyJobId } from './queue/type';
 
@@ -245,7 +248,7 @@ export class StoryGameService {
     const attemptId = randomUUID();
     let reviewInput: LanguageReviewInput | undefined;
 
-    await this.mutate(gameId, (snapshot) => {
+    await this.mutate(gameId, (snapshot, outbox) => {
       const panel = this.assertAuthorTurn(snapshot, userId, panelOrder);
       const now = Date.now();
       if (snapshot.game.turnEndsAt !== null && now > snapshot.game.turnEndsAt) {
@@ -282,6 +285,7 @@ export class StoryGameService {
         cast: castOf(snapshot).map(({ name, kind, description }) => ({ name, kind, description })),
         newCharacters: draft.newCharacters,
       };
+      this.pushAuthorStatus(snapshot, panel, now, outbox);
       return { setPanels: [panel], guard: { order: panelOrder } };
     });
 
@@ -308,13 +312,29 @@ export class StoryGameService {
         panel.drafts.push({ ...draft, review });
         if (review) panel.attempts += 1;
         result = this.reviewResult(panel, review);
+        if (snapshot.game.config.shareDrafts) {
+          outbox.push({
+            event: STORY_EVENTS.draftReviewed,
+            payload: {
+              gameId,
+              order: panelOrder,
+              authorId: userId,
+              ...draft,
+              reviewAvailable: result.reviewAvailable,
+              corrections: result.corrections,
+              characterCorrections: result.characterCorrections,
+            },
+          });
+        }
       }
 
       const guard = { order: panelOrder, attemptId };
+      const now = Date.now();
       if (panel.closeWhenReviewed) {
         // El turno venció mientras se revisaba: se cierra con este borrador.
-        return { ...this.closeTurn(snapshot, panel, 'timeout', outbox, Date.now()), guard };
+        return { ...this.closeTurn(snapshot, panel, 'timeout', outbox, now), guard };
       }
+      this.pushAuthorStatus(snapshot, panel, now, outbox);
       return { setPanels: [panel], guard };
     });
 
@@ -375,6 +395,45 @@ export class StoryGameService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Reacción de un jugador a una viñeta confirmada: una por jugador y viñeta.
+   * Otra reacción la reemplaza y `null` la quita. Vale desde que la viñeta se
+   * confirma hasta que la partida termina (también en el review final).
+   */
+  async reactToPanel(
+    gameId: string,
+    userId: string,
+    panelOrder: number,
+    emoji: StoryReaction | null,
+  ): Promise<void> {
+    await this.mutate(gameId, (snapshot, outbox) => {
+      const { game } = snapshot;
+      if (!STORY_REACTABLE_STATUSES.includes(game.status)) {
+        throw StoryError.invalidState('react to a panel', game.status);
+      }
+      this.assertActivePlayer(game, userId);
+      const panel = snapshot.panels[panelOrder];
+      if (panel?.status !== 'closed') {
+        throw new StoryError(
+          'PANEL_NOT_CONFIRMED',
+          `Panel ${panelOrder} is not confirmed yet`,
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      panel.reactions ??= {};
+      if ((panel.reactions[userId] ?? null) === emoji) return null;
+      if (emoji === null) delete panel.reactions[userId];
+      else panel.reactions[userId] = emoji;
+
+      outbox.push({
+        event: STORY_EVENTS.panelReaction,
+        payload: { gameId, order: panelOrder, userId, emoji },
+      });
+      return { setPanels: [panel] };
+    });
   }
 
   /** Estado completo de la partida tal como lo ve este jugador (reconexión). */
@@ -692,6 +751,22 @@ export class StoryGameService {
       outbox.push({ event: STORY_EVENTS.processingStarted, payload: { gameId: game.gameId } });
     }
     outbox.push({ event: STORY_EVENTS.stateChanged, payload: { snapshot } });
+  }
+
+  private pushAuthorStatus(
+    snapshot: StorySnapshot,
+    panel: PanelState,
+    now: number,
+    outbox: StoryOutboxItem[],
+  ) {
+    outbox.push({
+      event: STORY_EVENTS.authorStatus,
+      payload: {
+        gameId: snapshot.game.gameId,
+        order: panel.order,
+        status: authorStatusOf(panel, now),
+      },
+    });
   }
 
   /** La IA nunca bloquea la partida: cualquier fallo es "sin revisión". */

@@ -74,9 +74,15 @@ Los eventos que dispara un timer llegan a todos los jugadores igual que en la tr
    - b) Sin lock: revisa el inglés.
    - c) Con lock y guarda (`attemptId`): guarda el resultado solo si la viñeta sigue abierta y la revisión sigue siendo esta. Si el turno se cerró mientras tanto, el resultado se descarta (`TURN_CLOSED`).
    Solo una revisión exitosa y no `flagged` consume intento (máx. `MAX_REVIEW_ATTEMPTS`). Un borrador `flagged` se rechaza. Si la IA no está disponible, el borrador se guarda sin revisión.
+   En a) y c) se emite `authorStatus` a la sala: `reviewing` mientras la IA revisa; después, `correcting` si el autor ya tiene algún borrador guardado, o `writing` si no (ej. el primero vino `flagged`). Al abrir un turno el estado es `writing` (lo implica `turnStarted`). `gameState` lo trae en `turn.authorStatus`, y una revisión perdida (más vieja que `REVIEW_STALE_MS`) no cuenta como `reviewing`.
+   Con `config.shareDrafts` (por defecto `true`), cada borrador guardado se envía a la sala **menos el autor** como `panelDraftReviewed`: texto, escenario, personajes, personajes nuevos y correcciones, nunca el texto corregido. Un borrador `flagged` no se comparte. Un borrador sin revisión (IA caída) se comparte con `reviewAvailable: false` y sin correcciones.
 3. **Confirmar** (`confirmPanel`). Cierra la viñeta con el último borrador. Recién ahí los `newCharacters` de ese borrador entran al elenco (los de borradores anteriores se descartan). Se emite `panelConfirmed` y se abre el turno siguiente, o se pasa a PROCESSING si era la última.
 4. **Timeout** (`close-turn`). Si hay borradores, confirma el último (`confirmedBy: 'timeout'`, con sus personajes nuevos). Si no hay ninguno, la viñeta queda con `(The author ran out of time.)` y puntaje 0.
    Si al vencer hay una revisión en curso, no cierra todavía: marca `closeWhenReviewed`, y cuando se guarda el resultado de esa revisión el turno se cierra con ese borrador (`confirmedBy: 'timeout'`). Como respaldo, `close-turn` se reprograma (misma viñeta) para `inicio de la revisión + REVIEW_TIMEOUT_MS + 2 s`; si corre, cierra con lo que haya. Un borrador enviado después de `endsAt` se rechaza (`TURN_EXPIRED`).
+
+## Reacciones
+
+`reactToPanel` `{ panelOrder, emoji, gameId? }`: un jugador (que no abandonó) reacciona a una viñeta **confirmada**, en PLAYING, PROCESSING, REVIEW o FINISHED. Una reacción por jugador y viñeta: otra la reemplaza y `emoji: null` la quita; repetir la misma no hace nada. Emojis permitidos: `STORY_REACTIONS` (`👏 😂 😮 ❤️ 🔥`). Se guardan en la viñeta (`reactions: userId → emoji`), viajan en `storySoFar` y se difunden como `panelReaction` `{ gameId, order, userId, emoji }`. `gameId` va en el payload porque un socket puede seguir en la sala de una partida ya terminada. Sin `gameId` en el evento se usa la partida activa del usuario.
 
 ## Puntuación
 
@@ -124,29 +130,33 @@ Los errores van por el ack si el cliente lo envió; si no, por `storyError`: `{ 
 | ------------------- | ------------------- | ---------------------------------------------------------------------------------------- |
 | `createStoryGame`   | cliente → servidor  | Sin payload. Ack: `LobbyView`.                                                           |
 | `joinStoryGame`     | cliente → servidor  | `{ gameId }`. Solo en LOBBY; si ya era jugador, reconecta sin cambiar el orden.          |
-| `updateConfig`      | cliente → servidor  | Anfitrión, LOBBY. Parcial: `{ panelsCount?, turnDurationSec?, level?, language? }`.      |
+| `updateConfig`      | cliente → servidor  | Anfitrión, LOBBY. Parcial: `{ panelsCount?, turnDurationSec?, level?, language?, shareDrafts? }`. |
 | `kickPlayer`        | cliente → servidor  | Anfitrión, LOBBY. `{ userId }`. El expulsado recibe `storyError` con `code: 'KICKED'`.   |
 | `startStory`        | cliente → servidor  | Anfitrión. LOBBY → PLAYING y abre el primer turno.                                       |
 | `submitPanelDraft`  | cliente → servidor  | Autor. `{ panelOrder, text, scene, characterIds?, newCharacters? }`. Ack: `PanelReviewResultView`. |
 | `confirmPanel`      | cliente → servidor  | Autor. `{ panelOrder }`.                                                                 |
+| `reactToPanel`      | cliente → servidor  | `{ panelOrder, emoji \| null, gameId? }`. Ver Reacciones.                                |
 | `getGameState`      | cliente → servidor  | Ack: `GameStateView` (estado completo para ese jugador).                                 |
 | `leaveGame`         | cliente → servidor  | Sin payload.                                                                             |
 | `lobbyUpdated`      | servidor → sala     | `{ gameId, status, hostId, config, players: [{ userId, username, connected, left }] }`   |
 | `turnStarted`       | servidor → sala     | `{ panelOrder, authorId, endsAt, storySoFar, cast }`                                     |
 | `panelReviewResult` | servidor → autor    | `{ panelOrder, flagged, reviewAvailable, corrections, characterCorrections, attemptsLeft, message? }`. Nunca el texto corregido. |
+| `authorStatus`      | servidor → sala     | `{ order, status: 'writing' \| 'reviewing' \| 'correcting' }`                           |
+| `panelDraftReviewed`| servidor → sala menos el autor | Con `shareDrafts`: `{ order, authorId, text, scene, characterIds, newCharacters, reviewAvailable, corrections, characterCorrections }`. Nunca el texto corregido ni un borrador `flagged`. |
+| `panelReaction`     | servidor → sala     | `{ gameId, order, userId, emoji \| null }`                                                |
 | `panelConfirmed`    | servidor → sala     | `{ order, authorId, finalText, scene, characterIds, newCharacters, score, confirmedBy }` |
 | `gameState`         | servidor → jugador  | `GameStateView`, al reconectarse.                                                        |
 | `storyError`        | servidor → emisor   | `{ ok: false, status, message, code }`                                                   |
 
 `panelOrder` va en `submitPanelDraft` y `confirmPanel` para que un mensaje que llega tarde (por ejemplo, después del timeout) no se aplique al turno siguiente: si no es el turno en curso, se responde `TURN_CLOSED`.
 
-`GameStateView`: `{ lobby, turn: { panelOrder, authorId, endsAt } | null, storySoFar, cast, myTurn }`. `myTurn` es `null` salvo para el autor del turno en curso: `{ attempts, attemptsLeft, reviewing, drafts }`, con sus borradores y correcciones, sin el texto corregido.
+`GameStateView`: `{ lobby, turn: { panelOrder, authorId, endsAt, authorStatus } | null, storySoFar, cast, myTurn }`. Cada viñeta de `storySoFar` es `{ order, authorId, finalText, scene, characterIds, reactions }`. `myTurn` es `null` salvo para el autor del turno en curso: `{ attempts, attemptsLeft, reviewing, drafts }`, con sus borradores y correcciones, sin el texto corregido.
 
-Códigos de error: `VALIDATION_ERROR`, `USER_NOT_FOUND`, `GAME_NOT_FOUND`, `NOT_IN_GAME`, `ALREADY_IN_GAME`, `NOT_A_PLAYER`, `NOT_HOST`, `INVALID_STATE`, `GAME_FULL`, `NOT_ENOUGH_PLAYERS`, `NOT_ENOUGH_PANELS`, `CANNOT_KICK_SELF`, `KICKED`, `NOT_YOUR_TURN`, `TURN_CLOSED`, `TURN_EXPIRED`, `REVIEW_IN_PROGRESS`, `NO_ATTEMPTS_LEFT`, `DRAFT_LIMIT_REACHED`, `NO_DRAFT`, `INVALID_DRAFT`, `UNKNOWN_CHARACTER`, `TOO_MANY_CHARACTERS`, `DUPLICATE_CHARACTER_NAME`.
+Códigos de error: `VALIDATION_ERROR`, `USER_NOT_FOUND`, `GAME_NOT_FOUND`, `NOT_IN_GAME`, `ALREADY_IN_GAME`, `NOT_A_PLAYER`, `NOT_HOST`, `INVALID_STATE`, `GAME_FULL`, `NOT_ENOUGH_PLAYERS`, `NOT_ENOUGH_PANELS`, `CANNOT_KICK_SELF`, `KICKED`, `NOT_YOUR_TURN`, `TURN_CLOSED`, `TURN_EXPIRED`, `REVIEW_IN_PROGRESS`, `NO_ATTEMPTS_LEFT`, `DRAFT_LIMIT_REACHED`, `NO_DRAFT`, `INVALID_DRAFT`, `UNKNOWN_CHARACTER`, `TOO_MANY_CHARACTERS`, `DUPLICATE_CHARACTER_NAME`, `PANEL_NOT_CONFIRMED`.
 
 ## Reglas del lobby y la conexión
 
-- Configuración por defecto: 6 viñetas, 90 s por turno, nivel A2, `en-US`. Rangos en `story-game.config.ts`.
+- Configuración por defecto: 6 viñetas, 90 s por turno, nivel A2, `en-US`, `shareDrafts: true`. Rangos en `story-game.config.ts`.
 - 2 a 6 jugadores. `startStory` exige al menos 2 jugadores conectados y `panelsCount >= cantidad de jugadores` (todos escriben al menos una viñeta; los desconectados también cuentan).
 - Un usuario no puede estar en dos partidas activas a la vez (`ALREADY_IN_GAME`).
 - Desconexión: el jugador queda `connected: false` y vuelve al reconectarse (a cualquier instancia).
@@ -159,9 +169,10 @@ Códigos de error: `VALIDATION_ERROR`, `USER_NOT_FOUND`, `GAME_NOT_FOUND`, `NOT_
 - `story-game.service.spec.ts`: lobby, anfitrión, abandono y reconexión.
 - `story-game.turns.spec.ts`: turnos, borradores, personajes, confirmación, timeout (incluido el cierre exactamente una vez, con y sin lock, y el cierre diferido por una revisión en curso), reasignación y fin anticipado.
 - `domain/story-score.spec.ts`: `calculatePanelScore` (primer intento perfecto, autocorrección, timeout, sin texto, IA caída).
+- `story-game.sharing.spec.ts`: `authorStatus`, `panelDraftReviewed` (sin texto corregido, no `flagged`, `shareDrafts: false`) y reacciones.
 - `story-game.timers.spec.ts`: una tarea de la cola llega hasta `server.to(gameId).emit` (módulo de Nest real con `EventEmitterModule`).
 - `test/story-game/story-harness.ts`: Redis en memoria (emula el script Lua con guarda), reloj controlado y dependencias falsas, compartido por los dos specs anteriores.
 - `story-state.repository.spec.ts`: formato de las claves y de los scripts, con el cliente Redis mockeado. Incluye un bloque contra un Redis real (scripts Lua y guarda) que se salta si no hay `REDIS_TEST_URL`.
 - `queue/story-timeout.queue.spec.ts`: id fijo de la tarea, delay y cancelación.
-- `story-game.gateway.spec.ts`: salas personales, partida leída de Redis, `KICKED`, resultado de revisión solo al autor y eventos de turno.
+- `story-game.gateway.spec.ts`: salas personales, partida leída de Redis, `KICKED`, resultado de revisión solo al autor, borradores a la sala menos el autor, reacciones y eventos de turno.
 - `dto/story-dtos.spec.ts`: rangos de configuración y payloads a través del pipe del gateway.

@@ -24,7 +24,10 @@ import {
   toLobbyView,
 } from './domain/story-game.views';
 import {
+  AuthorStatusEvent,
+  DraftReviewedEvent,
   PanelConfirmedEvent,
+  PanelReactionEvent,
   STORY_EVENTS,
   StoryStateChangedEvent,
   TurnStartedEvent,
@@ -34,6 +37,7 @@ import { UpdateConfigDto } from './dto/update-config.dto';
 import { KickPlayerDto } from './dto/kick-player.dto';
 import { SubmitPanelDraftDto } from './dto/submit-panel-draft.dto';
 import { PanelOrderDto } from './dto/panel-order.dto';
+import { ReactToPanelDto } from './dto/react-to-panel.dto';
 import { createStoryValidationPipe } from './story-validation.pipe';
 import { STORY_ERROR_EVENT, StorySocket, storyUserRoom } from './types';
 
@@ -207,6 +211,21 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
     return { ok: true, data: null, message: 'panel confirmed' };
   }
 
+  /** `panelReaction` llega a la sala por los eventos del servicio. */
+  @SubscribeMessage('reactToPanel')
+  async handleReact(
+    @MessageBody() dto: ReactToPanelDto,
+    @ConnectedSocket() client: StorySocket,
+  ): Promise<ApiResponse<null>> {
+    await this.storyGameService.reactToPanel(
+      dto.gameId ?? (await this.requireGameId(client)),
+      client.data.userId,
+      dto.panelOrder,
+      dto.emoji,
+    );
+    return { ok: true, data: null, message: 'reaction saved' };
+  }
+
   @SubscribeMessage('getGameState')
   async handleGetGameState(
     @ConnectedSocket() client: StorySocket,
@@ -257,5 +276,22 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
   @OnEvent(STORY_EVENTS.panelConfirmed)
   onPanelConfirmed({ gameId, ...panel }: PanelConfirmedEvent) {
     this.server.to(gameId).emit('panelConfirmed', panel);
+  }
+
+  @OnEvent(STORY_EVENTS.authorStatus)
+  onAuthorStatus({ gameId, ...status }: AuthorStatusEvent) {
+    this.server.to(gameId).emit('authorStatus', status);
+  }
+
+  /** A la sala menos el autor (todos sus sockets): él ya tiene `panelReviewResult`. */
+  @OnEvent(STORY_EVENTS.draftReviewed)
+  onDraftReviewed({ gameId, ...draft }: DraftReviewedEvent) {
+    this.server.to(gameId).except(storyUserRoom(draft.authorId)).emit('panelDraftReviewed', draft);
+  }
+
+  /** Lleva `gameId`: un socket puede seguir en la sala de una partida ya terminada. */
+  @OnEvent(STORY_EVENTS.panelReaction)
+  onPanelReaction(reaction: PanelReactionEvent) {
+    this.server.to(reaction.gameId).emit('panelReaction', reaction);
   }
 }

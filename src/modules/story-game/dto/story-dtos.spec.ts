@@ -6,6 +6,7 @@ import { KickPlayerDto } from './kick-player.dto';
 import { JoinStoryGameDto } from './join-story-game.dto';
 import { SubmitPanelDraftDto } from './submit-panel-draft.dto';
 import { PanelOrderDto } from './panel-order.dto';
+import { ReactToPanelDto } from './react-to-panel.dto';
 
 const pipe = createStoryValidationPipe();
 const body = (metatype: ArgumentMetadata['metatype']): ArgumentMetadata => ({
@@ -31,6 +32,7 @@ describe('story DTO validation', () => {
       { turnDurationSec: 180 },
       { level: 'B2' },
       { language: 'en-US' },
+      { shareDrafts: false },
       {},
     ])('accepts %j', async (value) => {
       await expect(pipe.transform(value, body(UpdateConfigDto))).resolves.toBeInstanceOf(
@@ -46,6 +48,7 @@ describe('story DTO validation', () => {
       { turnDurationSec: 100 },
       { level: 'C1' },
       { language: 'es-ES' },
+      { shareDrafts: 'no' },
       { hostId: 'me' },
     ])('rejects %j as VALIDATION_ERROR', async (value) => {
       const error = await rejectionOf(value, UpdateConfigDto);
@@ -127,6 +130,26 @@ describe('story DTO validation', () => {
       expect((await rejectionOf({}, PanelOrderDto)).code).toBe('VALIDATION_ERROR');
       expect((await rejectionOf({ panelOrder: -1 }, PanelOrderDto)).code).toBe('VALIDATION_ERROR');
       expect((await rejectionOf({ panelOrder: 10 }, PanelOrderDto)).code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('ReactToPanelDto', () => {
+    it.each([
+      { panelOrder: 0, emoji: '😂' },
+      { panelOrder: 2, emoji: null },
+      { panelOrder: 1, emoji: '🔥', gameId: 'brave-red-fox' },
+    ])('accepts %j', async (value) => {
+      await expect(pipe.transform(value, body(ReactToPanelDto))).resolves.toEqual(value);
+    });
+
+    it.each([
+      { panelOrder: 0 },
+      { panelOrder: 0, emoji: '💩' },
+      { panelOrder: 0, emoji: 'lol' },
+      { emoji: '😂' },
+      { panelOrder: 0, emoji: '😂', gameId: '' },
+    ])('rejects %j', async (value) => {
+      expect((await rejectionOf(value, ReactToPanelDto)).code).toBe('VALIDATION_ERROR');
     });
   });
 });

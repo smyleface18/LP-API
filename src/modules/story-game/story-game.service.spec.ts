@@ -45,6 +45,7 @@ describe('StoryGameService', () => {
         turnDurationSec: 90,
         level: Level.A2,
         language: 'en-US',
+        shareDrafts: true,
       });
       expect(game.players.map((player) => player.userId)).toEqual(['alice']);
       expect(characters).toEqual({});
@@ -122,6 +123,7 @@ describe('StoryGameService', () => {
         turnDurationSec: 90,
         level: Level.A2,
         language: 'en-US',
+        shareDrafts: true,
       });
     });
 

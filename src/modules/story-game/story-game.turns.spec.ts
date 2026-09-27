@@ -105,6 +105,7 @@ describe('StoryGameService — turns', () => {
           finalText: TEXT,
           scene: 'A dark forest at night',
           characterIds: ['ch-0-0'],
+          reactions: {},
         },
       ]);
       expect(second.cast.map((character) => character.name)).toEqual(['Beep']);
@@ -696,7 +697,12 @@ describe('StoryGameService — turns', () => {
       expect((await panelOf(gameId, 0)).authorId).toBe('alice');
       await service.resume('alice');
       const state = await service.getGameState('alice');
-      expect(state.turn).toEqual({ panelOrder: 0, authorId: 'alice', endsAt: T0 + TURN_MS });
+      expect(state.turn).toEqual({
+        panelOrder: 0,
+        authorId: 'alice',
+        endsAt: T0 + TURN_MS,
+        authorStatus: 'correcting',
+      });
       expect(state.myTurn).toMatchObject({ attempts: 1, attemptsLeft: 1, reviewing: false });
       expect(state.myTurn!.drafts).toHaveLength(1);
     });

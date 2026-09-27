@@ -1,4 +1,13 @@
-import { PanelConfirmedBy, PanelScore, StoryCharacter, StorySnapshot } from './story-game.types';
+import { CharacterCorrection, Correction } from '@/modules/language-review/language-review.types';
+import { StoryReaction } from '../story-game.config';
+import {
+  AuthorStatus,
+  CharacterSheet,
+  PanelConfirmedBy,
+  PanelScore,
+  StoryCharacter,
+  StorySnapshot,
+} from './story-game.types';
 
 /**
  * Eventos internos que emite StoryGameService al terminar una operación (ya
@@ -10,6 +19,11 @@ export const STORY_EVENTS = {
   stateChanged: 'story.state-changed',
   turnStarted: 'story.turn-started',
   panelConfirmed: 'story.panel-confirmed',
+  /** El autor empezó a escribir, espera la revisión o corrige: `authorStatus` a la sala. */
+  authorStatus: 'story.author-status',
+  /** Borrador revisado, con `shareDrafts`: `panelDraftReviewed` a la sala menos el autor. */
+  draftReviewed: 'story.draft-reviewed',
+  panelReaction: 'story.panel-reaction',
   /** Entró a PROCESSING: punto de enganche de la generación de media (Fase 4). */
   processingStarted: 'story.processing-started',
 } as const;
@@ -21,6 +35,8 @@ export interface StoryPanelSummary {
   finalText: string;
   scene: string;
   characterIds: string[];
+  /** userId → emoji. */
+  reactions: Record<string, StoryReaction>;
 }
 
 export interface StoryStateChangedEvent {
@@ -49,6 +65,38 @@ export interface PanelConfirmedEvent {
   confirmedBy: PanelConfirmedBy;
 }
 
+export interface AuthorStatusEvent {
+  gameId: string;
+  order: number;
+  status: AuthorStatus;
+}
+
+/**
+ * Borrador revisado, tal como lo ven los demás jugadores. Nunca incluye el
+ * texto corregido, y un borrador `flagged` no se comparte.
+ */
+export interface DraftReviewedEvent {
+  gameId: string;
+  order: number;
+  authorId: string;
+  text: string;
+  scene: string;
+  characterIds: string[];
+  newCharacters: CharacterSheet[];
+  /** false si la IA no estaba disponible (sin correcciones). */
+  reviewAvailable: boolean;
+  corrections: Correction[];
+  characterCorrections: CharacterCorrection[];
+}
+
+/** `emoji: null` = el jugador quitó su reacción. */
+export interface PanelReactionEvent {
+  gameId: string;
+  order: number;
+  userId: string;
+  emoji: StoryReaction | null;
+}
+
 export interface ProcessingStartedEvent {
   gameId: string;
 }
@@ -57,4 +105,7 @@ export type StoryOutboxItem =
   | { event: typeof STORY_EVENTS.stateChanged; payload: StoryStateChangedEvent }
   | { event: typeof STORY_EVENTS.turnStarted; payload: TurnStartedEvent }
   | { event: typeof STORY_EVENTS.panelConfirmed; payload: PanelConfirmedEvent }
+  | { event: typeof STORY_EVENTS.authorStatus; payload: AuthorStatusEvent }
+  | { event: typeof STORY_EVENTS.draftReviewed; payload: DraftReviewedEvent }
+  | { event: typeof STORY_EVENTS.panelReaction; payload: PanelReactionEvent }
   | { event: typeof STORY_EVENTS.processingStarted; payload: ProcessingStartedEvent };

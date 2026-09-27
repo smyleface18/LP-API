@@ -1,4 +1,4 @@
-import { IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsOptional, Max, Min } from 'class-validator';
 import {
   STORY_LANGUAGES,
   STORY_LEVELS,
@@ -29,4 +29,9 @@ export class UpdateConfigDto {
   @IsOptional()
   @IsIn(STORY_LANGUAGES)
   language?: StoryLanguage;
+
+  /** Los demás ven los borradores revisados del autor (`panelDraftReviewed`). */
+  @IsOptional()
+  @IsBoolean()
+  shareDrafts?: boolean;
 }

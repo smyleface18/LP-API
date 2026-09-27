@@ -45,7 +45,10 @@ const REVIEW_RESULT = {
   attemptsLeft: 1,
 };
 
-/** Server de Socket.IO falso: registra `to(room).emit` e `in(room).socketsJoin/Leave`. */
+/**
+ * Server de Socket.IO falso: registra `to(room).emit` (con `except`, la sala
+ * queda como `room!excluded`) e `in(room).socketsJoin/Leave`.
+ */
 function fakeServer() {
   const emitted: [string, string, unknown][] = [];
   const joined: [string, string][] = [];
@@ -53,6 +56,10 @@ function fakeServer() {
   const server = {
     to: (room: string) => ({
       emit: (event: string, payload: unknown) => emitted.push([room, event, payload]),
+      except: (excluded: string) => ({
+        emit: (event: string, payload: unknown) =>
+          emitted.push([`${room}!${excluded}`, event, payload]),
+      }),
     }),
     in: (room: string) => ({
       socketsJoin: (target: string) => joined.push([room, target]),
@@ -75,6 +82,7 @@ describe('StoryGameGateway', () => {
       | 'getActiveGameId'
       | 'submitPanelDraft'
       | 'confirmPanel'
+      | 'reactToPanel'
     >
   >;
   let auth: { authenticateSocket: jest.Mock };
@@ -94,6 +102,7 @@ describe('StoryGameGateway', () => {
       getActiveGameId: jest.fn().mockResolvedValue('g1'),
       submitPanelDraft: jest.fn().mockResolvedValue(REVIEW_RESULT),
       confirmPanel: jest.fn().mockResolvedValue(undefined),
+      reactToPanel: jest.fn().mockResolvedValue(undefined),
     };
     auth = { authenticateSocket: jest.fn().mockResolvedValue({ username: 'alice' }) };
     gateway = new StoryGameGateway(
@@ -217,6 +226,42 @@ describe('StoryGameGateway', () => {
         { panelOrder: 1, authorId: 'bob', endsAt: 5, storySoFar: [], cast: [] },
       ],
     ]);
+  });
+
+  it('sends authorStatus to the whole room', () => {
+    gateway.onAuthorStatus({ gameId: 'g1', order: 0, status: 'reviewing' });
+    expect(io.emitted).toEqual([['g1', 'authorStatus', { order: 0, status: 'reviewing' }]]);
+  });
+
+  it('shares a reviewed draft with the room except all the sockets of its author', () => {
+    const draft = {
+      order: 0,
+      authorId: 'alice',
+      text: 'The robot walk into the forest at night.',
+      scene: 'Forest',
+      characterIds: [],
+      newCharacters: [],
+      reviewAvailable: true,
+      corrections: [],
+      characterCorrections: [],
+    };
+    gateway.onDraftReviewed({ gameId: 'g1', ...draft });
+    expect(io.emitted).toEqual([['g1!user:alice', 'panelDraftReviewed', draft]]);
+  });
+
+  it('reacts in the active game, or in the game the client names', async () => {
+    await gateway.handleReact({ panelOrder: 1, emoji: '😂' }, client('bob'));
+    expect(service.reactToPanel).toHaveBeenCalledWith('g1', 'bob', 1, '😂');
+
+    service.getActiveGameId.mockResolvedValue(null);
+    await gateway.handleReact({ panelOrder: 1, emoji: null, gameId: 'old' }, client('bob'));
+    expect(service.reactToPanel).toHaveBeenLastCalledWith('old', 'bob', 1, null);
+  });
+
+  it('relays reactions with their gameId', () => {
+    const reaction = { gameId: 'g1', order: 2, userId: 'bob', emoji: '🔥' as const };
+    gateway.onPanelReaction(reaction);
+    expect(io.emitted).toEqual([['g1', 'panelReaction', reaction]]);
   });
 
   it('sends the full game state to a reconnecting player', async () => {

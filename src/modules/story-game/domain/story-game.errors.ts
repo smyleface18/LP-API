@@ -24,6 +24,8 @@ export type StoryErrorCode =
   | 'UNKNOWN_CHARACTER'
   | 'TOO_MANY_CHARACTERS'
   | 'DUPLICATE_CHARACTER_NAME'
+  /** Solo se reacciona a viñetas ya confirmadas. */
+  | 'PANEL_NOT_CONFIRMED'
   /** Se envía al jugador expulsado por el anfitrión. */
   | 'KICKED';
 

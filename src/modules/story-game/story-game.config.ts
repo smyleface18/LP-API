@@ -25,6 +25,7 @@ export const STORY_DEFAULT_CONFIG = {
   turnDurationSec: 90 as StoryTurnDurationSec,
   level: Level.A2 as StoryLevel,
   language: 'en-US' as StoryLanguage,
+  shareDrafts: true,
 };
 
 /**
@@ -71,6 +72,10 @@ export const SCORE_FIRST_TRY_BONUS = 50;
 export const SCORE_SELF_CORRECTION_BONUS = 25;
 /** Puntaje fijo si la IA no pudo revisar el texto final: no se castiga al jugador. */
 export const SCORE_REVIEW_UNAVAILABLE = 60;
+
+/** Reacciones permitidas a una viñeta confirmada (una por jugador y viñeta). */
+export const STORY_REACTIONS = ['👏', '😂', '😮', '❤️', '🔥'] as const;
+export type StoryReaction = (typeof STORY_REACTIONS)[number];
 
 /** Personajes: se crean durante los turnos. */
 export const MAX_CHARACTERS_PER_STORY = 6;

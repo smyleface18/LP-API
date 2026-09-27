@@ -24,6 +24,7 @@ const PANEL: PanelState = {
   characterIds: [],
   score: null,
   confirmedBy: null,
+  reactions: {},
 };
 
 const GAME: StoryGame = {
