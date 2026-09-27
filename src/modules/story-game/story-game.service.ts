@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
-import { EventEmitter2 } from '@nestjs/event-emitter';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '@/db/entities';
@@ -12,7 +12,8 @@ import {
 } from '@/modules/language-review/language-review.types';
 import { PanelGuardError, StoryChanges, StoryStateRepository } from './story-state.repository';
 import { StoryError } from './domain/story-game.errors';
-import { STORY_EVENTS, StoryOutboxItem } from './domain/story-game.events';
+import { ProcessingStartedEvent, STORY_EVENTS, StoryOutboxItem } from './domain/story-game.events';
+import { ReviewManifest, toReviewManifest } from './domain/story-review';
 import {
   DraftInput,
   PanelConfirmedBy,
@@ -40,6 +41,7 @@ import {
 import { GameStateView, PanelReviewResultView, toGameStateView } from './domain/story-game.views';
 import { REVIEW_TIMEOUT_MS } from '@/modules/language-review/language-review.config';
 import {
+  FINISHED_STORY_TTL_MS,
   IDLE_ABANDON_DELAY_MS,
   MAX_DRAFTS_PER_TURN,
   MAX_REVIEW_ATTEMPTS,
@@ -436,6 +438,76 @@ export class StoryGameService {
     });
   }
 
+  /**
+   * Punto único de la generación de la historieta: corre al entrar a PROCESSING.
+   *
+   * Fase 4a: sin media, pasa de inmediato a REVIEW y a FINISHED. En la 4b acá
+   * se encola el flow `story-generation` de BullMQ: REVIEW llega cuando la
+   * viñeta 1 tiene su media y FINISHED cuando termina el flow.
+   */
+  @OnEvent(STORY_EVENTS.processingStarted, { async: true, promisify: true })
+  async onProcessingStarted({ gameId }: ProcessingStartedEvent): Promise<void> {
+    try {
+      await this.enterReview(gameId);
+      await this.finishStory(gameId);
+    } catch (error) {
+      this.logger.error(`story ${gameId}: processing failed: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * PROCESSING → REVIEW: emite `storyReviewReady` con el manifiesto y libera la
+   * partida activa de todos los jugadores (pueden crear o unirse a otra).
+   */
+  async enterReview(gameId: string): Promise<void> {
+    let entered = false;
+    const snapshot = await this.mutate(gameId, (snapshot, outbox) => {
+      const { game } = snapshot;
+      if (game.status !== StoryStatus.PROCESSING) return null;
+
+      game.status = StoryStatus.REVIEW;
+      entered = true;
+      outbox.push({ event: STORY_EVENTS.stateChanged, payload: { snapshot } });
+      outbox.push({
+        event: STORY_EVENTS.reviewReady,
+        payload: { gameId, manifest: toReviewManifest(snapshot) },
+      });
+      return { game };
+    });
+    if (!entered) return;
+
+    await Promise.all(
+      snapshot.game.players.map(({ userId }) => this.store.clearUserGame(userId, gameId)),
+    );
+  }
+
+  /** REVIEW → FINISHED. La partida queda en Redis FINISHED_STORY_TTL_MS (ver `mutate`). */
+  async finishStory(gameId: string): Promise<void> {
+    await this.mutate(gameId, (snapshot, outbox) => {
+      const { game } = snapshot;
+      if (game.status !== StoryStatus.REVIEW) return null;
+
+      game.status = StoryStatus.FINISHED;
+      outbox.push({ event: STORY_EVENTS.stateChanged, payload: { snapshot } });
+      this.logger.log(`story ${gameId} finished`);
+      return { game };
+    });
+  }
+
+  /**
+   * Manifiesto del review, en REVIEW o FINISHED. Lo puede pedir cualquier
+   * participante, incluso si salió de la partida.
+   */
+  async getReviewManifest(gameId: string, userId: string): Promise<ReviewManifest> {
+    const snapshot = await this.getSnapshot(gameId);
+    const { game } = snapshot;
+    if (!game.players.some((player) => player.userId === userId)) throw StoryError.notAPlayer();
+    if (game.status !== StoryStatus.REVIEW && game.status !== StoryStatus.FINISHED) {
+      throw StoryError.invalidState('get the review', game.status);
+    }
+    return toReviewManifest(snapshot);
+  }
+
   /** Estado completo de la partida tal como lo ve este jugador (reconexión). */
   async getGameState(userId: string): Promise<GameStateView> {
     const gameId = await this.store.getUserGame(userId);
@@ -577,6 +649,8 @@ export class StoryGameService {
       const previous = structuredClone(snapshot.game);
       const changes = fn(snapshot, outbox);
       if (!changes) return { previous, snapshot };
+      // Una partida terminada se guarda más tiempo, para servir su manifiesto.
+      if (snapshot.game.status === StoryStatus.FINISHED) changes.ttlMs = FINISHED_STORY_TTL_MS;
 
       try {
         await this.store.save(gameId, lock, changes);
@@ -732,9 +806,9 @@ export class StoryGameService {
   }
 
   /**
-   * Fin de los turnos: PROCESSING con las viñetas confirmadas (la generación
-   * de media llega en la Fase 4). Sin ninguna viñeta confirmada no hay nada que
-   * generar y la partida se abandona.
+   * Fin de los turnos: PROCESSING con las viñetas confirmadas. `processingStarted`
+   * dispara la generación (`onProcessingStarted`). Sin ninguna viñeta
+   * confirmada no hay nada que generar y la partida se abandona.
    */
   private startProcessing(snapshot: StorySnapshot, outbox: StoryOutboxItem[]) {
     const { game } = snapshot;
@@ -746,11 +820,14 @@ export class StoryGameService {
     if (closedPanels(snapshot).length === 0) {
       game.status = StoryStatus.ABANDONED;
       this.logger.log(`story ${game.gameId} abandoned (no confirmed panels)`);
-    } else {
-      game.status = StoryStatus.PROCESSING;
-      outbox.push({ event: STORY_EVENTS.processingStarted, payload: { gameId: game.gameId } });
+      outbox.push({ event: STORY_EVENTS.stateChanged, payload: { snapshot } });
+      return;
     }
+
+    game.status = StoryStatus.PROCESSING;
+    // Primero el estado: la generación puede avanzar a REVIEW enseguida.
     outbox.push({ event: STORY_EVENTS.stateChanged, payload: { snapshot } });
+    outbox.push({ event: STORY_EVENTS.processingStarted, payload: { gameId: game.gameId } });
   }
 
   private pushAuthorStatus(

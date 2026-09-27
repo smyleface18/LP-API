@@ -15,6 +15,7 @@ import { StoryGameService } from './story-game.service';
 import { StoryStateRepository } from './story-state.repository';
 import { StoryTimeoutProcessor } from './queue/story-timeout.processor';
 import { StoryJob } from './queue/type';
+import { StoryStatus } from './domain/story-game.types';
 import { InMemoryStoryStore } from '../../../test/story-game/story-harness';
 
 /**
@@ -63,6 +64,7 @@ describe('Timer-driven events reach the room', () => {
     moduleRef.get(StoryGameGateway).server = {
       to: (room: string) => ({
         emit: (event: string, payload: unknown) => emitted.push([room, event, payload]),
+        except: () => ({ emit: () => undefined }),
       }),
     } as unknown as Server;
 
@@ -92,5 +94,45 @@ describe('Timer-driven events reach the room', () => {
       ['g1', 'turnStarted'],
     ]);
     expect(emitted[1][2]).toMatchObject({ panelOrder: 1, authorId: 'bob' });
+  });
+
+  it('the last confirmed panel reaches storyReviewReady and FINISHED through @OnEvent', async () => {
+    await service.createGame('alice');
+    await service.joinGame('g1', 'bob');
+    await service.updateConfig('g1', 'alice', { panelsCount: 4 });
+    await service.startStory('g1', 'alice');
+    for (const [order, author] of ['alice', 'bob', 'alice', 'bob'].entries()) {
+      await service.submitPanelDraft('g1', author, order, {
+        text: 'The little robot walked slowly into the dark forest tonight.',
+        scene: 'Forest',
+        characterIds: [],
+        newCharacters: [],
+      });
+      await service.confirmPanel('g1', author, order);
+    }
+
+    // El listener de processingStarted es asíncrono: esperar a que termine.
+    for (
+      let i = 0;
+      i < 50 && (await service.getSnapshot('g1')).game.status !== StoryStatus.FINISHED;
+      i++
+    ) {
+      await new Promise(setImmediate);
+    }
+
+    expect((await service.getSnapshot('g1')).game.status).toBe(StoryStatus.FINISHED);
+    const statuses = emitted
+      .filter(([, event]) => event === 'lobbyUpdated')
+      .map(([, , lobby]) => (lobby as { status: StoryStatus }).status);
+    expect(statuses.slice(-3)).toEqual([
+      StoryStatus.PROCESSING,
+      StoryStatus.REVIEW,
+      StoryStatus.FINISHED,
+    ]);
+    const ready = emitted.filter(([, event]) => event === 'storyReviewReady');
+    expect(ready).toHaveLength(1);
+    expect(ready[0][0]).toBe('g1');
+    expect(ready[0][2]).toMatchObject({ storyId: 'g1' });
+    expect((ready[0][2] as { panels: unknown[] }).panels).toHaveLength(4);
   });
 });

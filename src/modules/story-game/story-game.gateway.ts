@@ -28,6 +28,7 @@ import {
   DraftReviewedEvent,
   PanelConfirmedEvent,
   PanelReactionEvent,
+  ReviewReadyEvent,
   STORY_EVENTS,
   StoryStateChangedEvent,
   TurnStartedEvent,
@@ -38,6 +39,8 @@ import { KickPlayerDto } from './dto/kick-player.dto';
 import { SubmitPanelDraftDto } from './dto/submit-panel-draft.dto';
 import { PanelOrderDto } from './dto/panel-order.dto';
 import { ReactToPanelDto } from './dto/react-to-panel.dto';
+import { GetReviewManifestDto } from './dto/get-review-manifest.dto';
+import { ReviewManifest } from './domain/story-review';
 import { createStoryValidationPipe } from './story-validation.pipe';
 import { STORY_ERROR_EVENT, StorySocket, storyUserRoom } from './types';
 
@@ -234,6 +237,21 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
     return { ok: true, data: state, message: 'game state' };
   }
 
+  /**
+   * Manifiesto del review (REVIEW o FINISHED). Lleva `gameId` porque al entrar
+   * a REVIEW la partida deja de ser la activa del usuario. El socket entra a la
+   * sala para recibir las reacciones.
+   */
+  @SubscribeMessage('getReviewManifest')
+  async handleGetReviewManifest(
+    @MessageBody() dto: GetReviewManifestDto,
+    @ConnectedSocket() client: StorySocket,
+  ): Promise<ApiResponse<ReviewManifest>> {
+    const manifest = await this.storyGameService.getReviewManifest(dto.gameId, client.data.userId);
+    await client.join(dto.gameId);
+    return { ok: true, data: manifest, message: 'review manifest' };
+  }
+
   @SubscribeMessage('leaveGame')
   async handleLeave(@ConnectedSocket() client: StorySocket): Promise<ApiResponse<null>> {
     const gameId = await this.requireGameId(client);
@@ -287,6 +305,11 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
   @OnEvent(STORY_EVENTS.draftReviewed)
   onDraftReviewed({ gameId, ...draft }: DraftReviewedEvent) {
     this.server.to(gameId).except(storyUserRoom(draft.authorId)).emit('panelDraftReviewed', draft);
+  }
+
+  @OnEvent(STORY_EVENTS.reviewReady)
+  onReviewReady({ gameId, manifest }: ReviewReadyEvent) {
+    this.server.to(gameId).emit('storyReviewReady', manifest);
   }
 
   /** Lleva `gameId`: un socket puede seguir en la sala de una partida ya terminada. */

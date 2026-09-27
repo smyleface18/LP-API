@@ -2,6 +2,7 @@ import { CharacterCorrection, Correction } from '@/modules/language-review/langu
 import { MAX_REVIEW_ATTEMPTS } from '../story-game.config';
 import { StoryPanelSummary } from './story-game.events';
 import { authorStatusOf, castOf, storySoFar } from './story-turns';
+import { ScoreboardEntry, scoreboardOf } from './story-review';
 import {
   AuthorStatus,
   DraftInput,
@@ -77,6 +78,8 @@ export interface GameStateView {
   turn: TurnView | null;
   storySoFar: StoryPanelSummary[];
   cast: StoryCharacter[];
+  /** Puntajes acumulados, ordenados por promedio por viñeta. */
+  scoreboard: ScoreboardEntry[];
   /** Solo para el autor del turno en curso. */
   myTurn: {
     attempts: number;
@@ -121,6 +124,7 @@ export function toGameStateView(
         : null,
     storySoFar: storySoFar(snapshot),
     cast: castOf(snapshot),
+    scoreboard: scoreboardOf(game),
     myTurn:
       openPanel && openPanel.authorId === userId
         ? {

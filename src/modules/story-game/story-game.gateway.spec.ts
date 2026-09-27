@@ -7,6 +7,7 @@ import { StorySnapshot, StoryStatus } from './domain/story-game.types';
 import { STORY_DEFAULT_CONFIG } from './story-game.config';
 import { StorySocket } from './types';
 import { SubmitPanelDraftDto } from './dto/submit-panel-draft.dto';
+import { ReviewManifest } from './domain/story-review';
 
 const snapshot = (gameId = 'g1'): StorySnapshot => ({
   game: {
@@ -43,6 +44,14 @@ const REVIEW_RESULT = {
   corrections: [],
   characterCorrections: [],
   attemptsLeft: 1,
+};
+
+const MANIFEST: ReviewManifest = {
+  storyId: 'g1',
+  gameId: 'g1',
+  characters: [],
+  ranking: [],
+  panels: [],
 };
 
 /**
@@ -83,6 +92,7 @@ describe('StoryGameGateway', () => {
       | 'submitPanelDraft'
       | 'confirmPanel'
       | 'reactToPanel'
+      | 'getReviewManifest'
     >
   >;
   let auth: { authenticateSocket: jest.Mock };
@@ -103,6 +113,7 @@ describe('StoryGameGateway', () => {
       submitPanelDraft: jest.fn().mockResolvedValue(REVIEW_RESULT),
       confirmPanel: jest.fn().mockResolvedValue(undefined),
       reactToPanel: jest.fn().mockResolvedValue(undefined),
+      getReviewManifest: jest.fn().mockResolvedValue(MANIFEST),
     };
     auth = { authenticateSocket: jest.fn().mockResolvedValue({ username: 'alice' }) };
     gateway = new StoryGameGateway(
@@ -262,6 +273,21 @@ describe('StoryGameGateway', () => {
     const reaction = { gameId: 'g1', order: 2, userId: 'bob', emoji: '🔥' as const };
     gateway.onPanelReaction(reaction);
     expect(io.emitted).toEqual([['g1', 'panelReaction', reaction]]);
+  });
+
+  it('sends storyReviewReady with the manifest to the room', () => {
+    gateway.onReviewReady({ gameId: 'g1', manifest: MANIFEST });
+    expect(io.emitted).toEqual([['g1', 'storyReviewReady', MANIFEST]]);
+  });
+
+  it('serves the manifest of the game the client names and joins it to the room', async () => {
+    service.getActiveGameId.mockResolvedValue(null);
+    const join = jest.fn();
+    const ack = await gateway.handleGetReviewManifest({ gameId: 'g1' }, client('bob', join));
+
+    expect(service.getReviewManifest).toHaveBeenCalledWith('g1', 'bob');
+    expect(ack.data).toEqual(MANIFEST);
+    expect(join).toHaveBeenCalledWith('g1');
   });
 
   it('sends the full game state to a reconnecting player', async () => {

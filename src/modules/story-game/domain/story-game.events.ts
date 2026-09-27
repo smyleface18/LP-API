@@ -8,6 +8,7 @@ import {
   StoryCharacter,
   StorySnapshot,
 } from './story-game.types';
+import { ReviewManifest } from './story-review';
 
 /**
  * Eventos internos que emite StoryGameService al terminar una operación (ya
@@ -24,8 +25,10 @@ export const STORY_EVENTS = {
   /** Borrador revisado, con `shareDrafts`: `panelDraftReviewed` a la sala menos el autor. */
   draftReviewed: 'story.draft-reviewed',
   panelReaction: 'story.panel-reaction',
-  /** Entró a PROCESSING: punto de enganche de la generación de media (Fase 4). */
+  /** Entró a PROCESSING: punto de enganche de la generación de media (Fase 4b). */
   processingStarted: 'story.processing-started',
+  /** Entró a REVIEW: `storyReviewReady` con el manifiesto. */
+  reviewReady: 'story.review-ready',
 } as const;
 
 /** Resumen de una viñeta confirmada, tal como la ven todos durante la partida. */
@@ -101,6 +104,11 @@ export interface ProcessingStartedEvent {
   gameId: string;
 }
 
+export interface ReviewReadyEvent {
+  gameId: string;
+  manifest: ReviewManifest;
+}
+
 export type StoryOutboxItem =
   | { event: typeof STORY_EVENTS.stateChanged; payload: StoryStateChangedEvent }
   | { event: typeof STORY_EVENTS.turnStarted; payload: TurnStartedEvent }
@@ -108,4 +116,5 @@ export type StoryOutboxItem =
   | { event: typeof STORY_EVENTS.authorStatus; payload: AuthorStatusEvent }
   | { event: typeof STORY_EVENTS.draftReviewed; payload: DraftReviewedEvent }
   | { event: typeof STORY_EVENTS.panelReaction; payload: PanelReactionEvent }
-  | { event: typeof STORY_EVENTS.processingStarted; payload: ProcessingStartedEvent };
+  | { event: typeof STORY_EVENTS.processingStarted; payload: ProcessingStartedEvent }
+  | { event: typeof STORY_EVENTS.reviewReady; payload: ReviewReadyEvent };

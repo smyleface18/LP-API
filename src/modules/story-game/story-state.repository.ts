@@ -48,6 +48,8 @@ export interface StoryChanges {
   setPanels?: PanelState[];
   deletePanels?: number[];
   guard?: PanelGuard;
+  /** TTL de las claves de la partida desde esta escritura. Por defecto MATCH_TTL. */
+  ttlMs?: number;
 }
 
 interface HashOps {
@@ -201,7 +203,7 @@ export class StoryStateRepository {
       ],
       arguments: [
         lock.token,
-        String(this.ttlMs),
+        String(changes.ttlMs ?? this.ttlMs),
         JSON.stringify([game, characters, panels]),
         changes.guard ? JSON.stringify(changes.guard) : '',
       ],

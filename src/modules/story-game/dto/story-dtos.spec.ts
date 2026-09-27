@@ -7,6 +7,7 @@ import { JoinStoryGameDto } from './join-story-game.dto';
 import { SubmitPanelDraftDto } from './submit-panel-draft.dto';
 import { PanelOrderDto } from './panel-order.dto';
 import { ReactToPanelDto } from './react-to-panel.dto';
+import { GetReviewManifestDto } from './get-review-manifest.dto';
 
 const pipe = createStoryValidationPipe();
 const body = (metatype: ArgumentMetadata['metatype']): ArgumentMetadata => ({
@@ -130,6 +131,18 @@ describe('story DTO validation', () => {
       expect((await rejectionOf({}, PanelOrderDto)).code).toBe('VALIDATION_ERROR');
       expect((await rejectionOf({ panelOrder: -1 }, PanelOrderDto)).code).toBe('VALIDATION_ERROR');
       expect((await rejectionOf({ panelOrder: 10 }, PanelOrderDto)).code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('GetReviewManifestDto', () => {
+    it('requires a gameId', async () => {
+      await expect(
+        pipe.transform({ gameId: 'brave-red-fox' }, body(GetReviewManifestDto)),
+      ).resolves.toEqual({ gameId: 'brave-red-fox' });
+      expect((await rejectionOf({}, GetReviewManifestDto)).code).toBe('VALIDATION_ERROR');
+      expect((await rejectionOf({ gameId: '' }, GetReviewManifestDto)).code).toBe(
+        'VALIDATION_ERROR',
+      );
     });
   });
 

@@ -30,6 +30,8 @@ import {
 export class InMemoryStoryStore {
   games = new Map<string, string>();
   userGames = new Map<string, string>();
+  /** TTL de la última escritura de cada partida (undefined = MATCH_TTL). */
+  ttls = new Map<string, number | undefined>();
   /** false simula un lock perdido: las operaciones se intercalan y solo queda la guarda. */
   serialize = true;
   private queue: Promise<unknown> = Promise.resolve();
@@ -66,6 +68,7 @@ export class InMemoryStoryStore {
     for (const panel of changes.setPanels ?? []) snapshot.panels[panel.order] = panel;
     for (const order of changes.deletePanels ?? []) delete snapshot.panels[order];
     this.games.set(gameId, JSON.stringify(snapshot));
+    this.ttls.set(gameId, changes.ttlMs);
     return Promise.resolve();
   }
 

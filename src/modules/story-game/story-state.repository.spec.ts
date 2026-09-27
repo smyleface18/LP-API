@@ -185,6 +185,15 @@ describe('StoryStateRepository (mocked Redis)', () => {
     expect(evalOptions().arguments[3]).toBe('');
   });
 
+  it('uses MATCH_TTL unless the write asks for another TTL', async () => {
+    redis.eval.mockResolvedValue(1);
+    await repository.save(GAME.gameId, { key: 'lock', token: 'tok' }, { game: GAME });
+    expect(evalOptions().arguments[1]).toBe('3600000');
+
+    await repository.save(GAME.gameId, { key: 'lock', token: 'tok' }, { game: GAME, ttlMs: 5000 });
+    expect(evalOptions(1).arguments[1]).toBe('5000');
+  });
+
   it('sends the panel guard and reports when Redis rejects it', async () => {
     redis.eval.mockResolvedValue(-1);
     await expect(

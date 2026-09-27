@@ -35,6 +35,13 @@ export const STORY_DEFAULT_CONFIG = {
  */
 export const IDLE_ABANDON_DELAY_MS = 60_000;
 
+/**
+ * TTL en Redis de una partida FINISHED, para que el manifiesto se pueda
+ * consultar (getReviewManifest) hasta que exista la persistencia (Fase 4c).
+ * Las partidas en curso usan MATCH_TTL.
+ */
+export const FINISHED_STORY_TTL_MS = 24 * 60 * 60 * 1000;
+
 /** Revisiones de IA que puede usar un jugador en su viñeta. */
 export const MAX_REVIEW_ATTEMPTS = 2;
 export const MAX_CHARS_PER_PANEL = 320;
