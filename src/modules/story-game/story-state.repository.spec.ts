@@ -49,6 +49,8 @@ const GAME: StoryGame = {
   abandonAt: null,
   abandonSeq: 0,
   createdAt: 1,
+  storyId: null,
+  mediaDeadlineAt: null,
 };
 
 interface EvalOptions {
@@ -163,7 +165,14 @@ describe('StoryStateRepository (mocked Redis)', () => {
     redis.eval.mockResolvedValue(1);
     await repository.save(GAME.gameId, { key: 'lock', token: 'tok' }, { game: GAME });
     const [gameOps] = JSON.parse(evalOptions().arguments[2]) as { del: string[] }[];
-    expect(gameOps.del).toEqual(['currentPanel', 'turnEndsAt', 'turnCloseAt', 'abandonAt']);
+    expect(gameOps.del).toEqual([
+      'storyId',
+      'currentPanel',
+      'turnEndsAt',
+      'turnCloseAt',
+      'abandonAt',
+      'mediaDeadlineAt',
+    ]);
   });
 
   it('throws when the lock was lost before writing', async () => {

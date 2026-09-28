@@ -9,7 +9,7 @@ import { LanguageReviewModule } from '@/modules/language-review/language-review.
 import { StoryGameGateway } from './story-game.gateway';
 import { StoryGameService } from './story-game.service';
 import { StoryStateRepository } from './story-state.repository';
-import { StoryAvatars } from './story-avatars.service';
+import { StoryUrlSigner } from './story-url-signer.service';
 
 @Module({
   imports: [
@@ -20,7 +20,7 @@ import { StoryAvatars } from './story-avatars.service';
     LanguageReviewModule,
     TypeOrmModule.forFeature([User]),
   ],
-  providers: [StoryGameGateway, StoryGameService, StoryStateRepository, StoryAvatars],
-  exports: [StoryGameService],
+  providers: [StoryGameGateway, StoryGameService, StoryStateRepository, StoryUrlSigner],
+  exports: [StoryGameService, StoryUrlSigner],
 })
 export class StoryGameModule {}

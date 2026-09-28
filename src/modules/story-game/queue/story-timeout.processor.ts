@@ -23,6 +23,9 @@ export class StoryTimeoutProcessor extends WorkerHost {
       case 'close-turn':
         await this.storyGameService.closeTurnByTimeout(gameId, seq, dueAt);
         return;
+      case 'media-deadline':
+        await this.storyGameService.expireMedia(gameId, dueAt);
+        return;
       default:
         this.logger.warn(`unknown job: ${job.name}`);
     }

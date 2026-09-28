@@ -172,6 +172,22 @@
     "@smithy/util-utf8" "^4.2.2"
     tslib "^2.6.2"
 
+"@aws-sdk/client-polly@^3.1138.0":
+  version "3.1141.0"
+  resolved "https://registry.npmjs.org/@aws-sdk/client-polly/-/client-polly-3.1141.0.tgz#4c09d1753b36e35934a9b9d838f099c8d96b54b8"
+  integrity sha512-bSaZMb4xPI8OxAjBSbJg6RdtbnKJK11Pc65aKTa/JH6OzFZhtT8/Kv0mMaLBIs3vSyIkCNBfrbWcd3hzs38VnQ==
+  dependencies:
+    "@aws-sdk/core" "^3.978.1"
+    "@aws-sdk/credential-provider-node" "^3.972.84"
+    "@aws-sdk/eventstream-handler-node" "^3.972.35"
+    "@aws-sdk/middleware-eventstream" "^3.972.30"
+    "@aws-sdk/types" "^3.974.6"
+    "@smithy/core" "^3.35.0"
+    "@smithy/fetch-http-handler" "^5.8.0"
+    "@smithy/node-http-handler" "^4.12.1"
+    "@smithy/types" "^4.19.0"
+    tslib "^2.6.2"
+
 "@aws-sdk/client-s3@^3.1138.0":
   version "3.1138.0"
   resolved "https://registry.npmjs.org/@aws-sdk/client-s3/-/client-s3-3.1138.0.tgz#9c370f4d5af13c0a620d876a49e466ce4987885d"

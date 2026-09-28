@@ -3,6 +3,7 @@ import { StoryReaction } from '../story-game.config';
 import {
   AuthorStatus,
   CharacterSheet,
+  PanelMedia,
   PanelConfirmedBy,
   PanelScore,
   StoryCharacter,
@@ -28,6 +29,14 @@ export const STORY_EVENTS = {
   processingStarted: 'story.processing-started',
   /** Entró a REVIEW: `storyReviewReady` con el manifiesto. */
   reviewReady: 'story.review-ready',
+  /** Viñetas a generar: la cola `story-media` crea una tarea por cada una. */
+  mediaRequested: 'story.media-requested',
+  /** Avance de la generación en PROCESSING: `storyProcessing` a la sala. */
+  processing: 'story.processing',
+  /** Una viñeta terminó su media (lista o fallida): `panelMediaReady` a la sala. */
+  panelMediaReady: 'story.panel-media-ready',
+  /** Entró a FINISHED: se guarda en Postgres (Fase 4c). */
+  finished: 'story.finished',
 } as const;
 
 /** Resumen de una viñeta confirmada, tal como la ven todos durante la partida. */
@@ -112,6 +121,39 @@ export interface ReviewReadyEvent {
   snapshot: StorySnapshot;
 }
 
+/** Una viñeta a narrar y dibujar (ver StoryMediaQueue). */
+export interface PanelMediaRequestEvent {
+  gameId: string;
+  storyId: string;
+  order: number;
+  text: string;
+  scene: string;
+  characters: CharacterSheet[];
+  languageCode: string;
+}
+
+export interface MediaRequestedEvent {
+  gameId: string;
+  panels: PanelMediaRequestEvent[];
+}
+
+export interface StoryProcessingEvent {
+  gameId: string;
+  /** Viñetas con media a generar (sin contar las que vencieron sin texto). */
+  panelsTotal: number;
+  panelsDone: number;
+}
+
+export interface PanelMediaReadyEvent {
+  gameId: string;
+  order: number;
+  media: PanelMedia;
+}
+
+export interface StoryFinishedEvent {
+  snapshot: StorySnapshot;
+}
+
 export type StoryOutboxItem =
   | { event: typeof STORY_EVENTS.stateChanged; payload: StoryStateChangedEvent }
   | { event: typeof STORY_EVENTS.turnStarted; payload: TurnStartedEvent }
@@ -120,4 +162,8 @@ export type StoryOutboxItem =
   | { event: typeof STORY_EVENTS.draftReviewed; payload: DraftReviewedEvent }
   | { event: typeof STORY_EVENTS.panelReaction; payload: PanelReactionEvent }
   | { event: typeof STORY_EVENTS.processingStarted; payload: ProcessingStartedEvent }
-  | { event: typeof STORY_EVENTS.reviewReady; payload: ReviewReadyEvent };
+  | { event: typeof STORY_EVENTS.reviewReady; payload: ReviewReadyEvent }
+  | { event: typeof STORY_EVENTS.mediaRequested; payload: MediaRequestedEvent }
+  | { event: typeof STORY_EVENTS.processing; payload: StoryProcessingEvent }
+  | { event: typeof STORY_EVENTS.panelMediaReady; payload: PanelMediaReadyEvent }
+  | { event: typeof STORY_EVENTS.finished; payload: StoryFinishedEvent };

@@ -85,6 +85,13 @@ describe('StoryGameService — turns', () => {
       );
     });
 
+    it('a single player writes every panel', async () => {
+      const gameId = await h.playingWith('alice');
+      await writePanel(gameId);
+      await writePanel(gameId);
+      expect(turnsStarted().map((turn) => turn.authorId)).toEqual(['alice', 'alice', 'alice']);
+    });
+
     it('rotates authors as players[i % n]', async () => {
       const gameId = await h.playingWith('alice', 'bob');
       await writePanel(gameId);
@@ -754,6 +761,13 @@ describe('StoryGameService — turns', () => {
       expect(snapshot.game.status).toBe(StoryStatus.PROCESSING);
       expect(Object.keys(snapshot.panels)).toEqual(['0']);
       expect(h.emitted(STORY_EVENTS.processingStarted)).toEqual([{ gameId }]);
+    });
+
+    it('a solo story ends with the confirmed panels when its player leaves', async () => {
+      const gameId = await h.playingWith('alice');
+      await writePanel(gameId);
+      await service.leaveGame(gameId, 'alice');
+      expect((await h.gameOf(gameId)).status).toBe(StoryStatus.PROCESSING);
     });
 
     it('abandons instead when nothing was confirmed yet', async () => {

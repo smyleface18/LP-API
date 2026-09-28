@@ -32,8 +32,17 @@ import {
   StoryStatus,
 } from './story-game.types';
 
-/** userId → URL firmada del avatar (`StoryAvatars.urlsFor`). Sin entrada = sin avatar. */
+/** userId → URL firmada del avatar (`StoryUrlSigner.avatarsFor`). Sin entrada = sin avatar. */
 export type AvatarUrls = Record<string, string>;
+
+/** URLs firmadas del audio y la imagen de una viñeta. */
+export interface PanelMediaUrls {
+  audioUrl: string | null;
+  imageUrl: string | null;
+}
+
+/** order → URLs de la media de esa viñeta (`StoryUrlSigner.mediaFor`). */
+export type MediaUrls = Record<number, PanelMediaUrls>;
 
 /** Payload de `lobbyUpdated`. */
 export interface LobbyView {

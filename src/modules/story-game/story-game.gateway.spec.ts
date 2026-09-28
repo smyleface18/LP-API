@@ -8,7 +8,7 @@ import { STORY_DEFAULT_CONFIG } from './story-game.config';
 import { StorySocket } from './types';
 import { SubmitPanelDraftDto } from './dto/submit-panel-draft.dto';
 import { ReviewManifest } from './domain/story-review';
-import { StoryAvatars } from './story-avatars.service';
+import { StoryUrlSigner } from './story-url-signer.service';
 import { STORY_REACTIONS } from './story-game.config';
 
 const snapshot = (gameId = 'g1'): StorySnapshot => ({
@@ -35,6 +35,8 @@ const snapshot = (gameId = 'g1'): StorySnapshot => ({
     abandonAt: null,
     abandonSeq: 0,
     createdAt: 1,
+    storyId: null,
+    mediaDeadlineAt: null,
   },
   characters: {},
   panels: {},
@@ -99,7 +101,7 @@ describe('StoryGameGateway', () => {
     >
   >;
   let auth: { authenticateSocket: jest.Mock };
-  let avatars: { urlsFor: jest.Mock };
+  let urls: { avatarsFor: jest.Mock; mediaFor: jest.Mock; signMedia: jest.Mock };
   let gateway: StoryGameGateway;
   let io: ReturnType<typeof fakeServer>;
   const client = (userId = 'alice', join = jest.fn()) =>
@@ -120,11 +122,15 @@ describe('StoryGameGateway', () => {
       getReviewManifest: jest.fn().mockResolvedValue(MANIFEST),
     };
     auth = { authenticateSocket: jest.fn().mockResolvedValue({ username: 'alice' }) };
-    avatars = { urlsFor: jest.fn().mockResolvedValue({ alice: 'https://signed/alice' }) };
+    urls = {
+      avatarsFor: jest.fn().mockResolvedValue({ alice: 'https://signed/alice' }),
+      mediaFor: jest.fn().mockResolvedValue({}),
+      signMedia: jest.fn().mockResolvedValue({ audioUrl: 'https://signed/audio', imageUrl: null }),
+    };
     gateway = new StoryGameGateway(
       service as unknown as StoryGameService,
       auth as unknown as WsAuthService,
-      avatars as unknown as StoryAvatars,
+      urls as unknown as StoryUrlSigner,
     );
     io = fakeServer();
     gateway.server = io.server;
@@ -310,12 +316,12 @@ describe('StoryGameGateway', () => {
         left: false,
       },
     ]);
-    expect(avatars.urlsFor).toHaveBeenCalledWith(snapshot().game.players);
+    expect(urls.avatarsFor).toHaveBeenCalledWith(snapshot().game.players);
   });
 
   it('keeps the order of room events even when signing the avatars is slow', async () => {
     let release!: () => void;
-    avatars.urlsFor.mockReturnValueOnce(new Promise((resolve) => (release = () => resolve({}))));
+    urls.avatarsFor.mockReturnValueOnce(new Promise((resolve) => (release = () => resolve({}))));
     const stateChanged = gateway.onStateChanged({ snapshot: snapshot() });
     const turnStarted = gateway.onTurnStarted({
       gameId: 'g1',
@@ -333,10 +339,43 @@ describe('StoryGameGateway', () => {
   });
 
   it('keeps emitting after a failed emission', async () => {
-    avatars.urlsFor.mockRejectedValueOnce(new Error('S3 down'));
+    urls.avatarsFor.mockRejectedValueOnce(new Error('S3 down'));
     await gateway.onStateChanged({ snapshot: snapshot() });
     await gateway.onAuthorStatus({ gameId: 'g1', order: 0, status: 'writing' });
     expect(io.emitted.map(([, event]) => event)).toEqual(['authorStatus']);
+  });
+
+  it('relays the media progress to the room', async () => {
+    await gateway.onProcessing({ gameId: 'g1', panelsTotal: 4, panelsDone: 1 });
+    expect(io.emitted).toEqual([
+      ['g1', 'storyProcessing', { gameId: 'g1', panelsTotal: 4, panelsDone: 1 }],
+    ]);
+  });
+
+  it('signs the media of a panel before sending it, never the S3 keys', async () => {
+    const media = {
+      status: 'ready' as const,
+      audioKey: 'story/s1/panel-0.mp3',
+      imageKey: null,
+      speechMarks: [{ time: 0, start: 0, end: 3, value: 'Max' }],
+    };
+    await gateway.onPanelMediaReady({ gameId: 'g1', order: 0, media });
+
+    expect(urls.signMedia).toHaveBeenCalledWith(media);
+    expect(io.emitted).toEqual([
+      [
+        'g1',
+        'panelMediaReady',
+        {
+          gameId: 'g1',
+          order: 0,
+          mediaStatus: 'ready',
+          audioUrl: 'https://signed/audio',
+          imageUrl: null,
+          speechMarks: media.speechMarks,
+        },
+      ],
+    ]);
   });
 
   it('answers timeSync with the server time', () => {
@@ -348,7 +387,7 @@ describe('StoryGameGateway', () => {
     const { data } = gateway.handleGetRules();
     expect(data?.reactions).toEqual(STORY_REACTIONS);
     expect(data?.config.defaults).toEqual(STORY_DEFAULT_CONFIG);
-    expect(data?.players).toEqual({ min: 2, max: 6 });
+    expect(data?.players).toEqual({ min: 1, max: 6 });
   });
 
   it('serves the manifest of the game the client names and joins it to the room', async () => {

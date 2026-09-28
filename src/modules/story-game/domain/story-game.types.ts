@@ -59,7 +59,7 @@ export interface StoryPlayer {
   username: string;
   /**
    * Key en S3 del avatar (no la URL: las URLs firmadas vencen). Se firma al
-   * enviar las vistas (`StoryAvatars`). Partidas viejas en Redis no la tienen.
+   * enviar las vistas (`StoryUrlSigner`). Partidas viejas en Redis no la tienen.
    */
   avatarKey?: string | null;
   connected: boolean;
@@ -113,6 +113,16 @@ export interface StoryGame {
   /** Sube cada vez que la partida queda vacía: invalida tareas de abandono viejas. */
   abandonSeq: number;
   createdAt: number;
+  /**
+   * Id de la historieta (el de Postgres, Fase 4c). Se asigna al empezar la
+   * generación de la media; null antes.
+   */
+  storyId: string | null;
+  /**
+   * Plazo de la generación de media: al vencer, las viñetas que sigan
+   * `pending` pasan a `failed` y la partida avanza. null si no hay nada pendiente.
+   */
+  mediaDeadlineAt: number | null;
 }
 
 /** Lo que el autor envía en `submitPanelDraft`. */
@@ -171,6 +181,32 @@ export interface PanelState {
   confirmedBy: PanelConfirmedBy | null;
   /** Reacciones a la viñeta confirmada: userId → emoji (una por jugador). */
   reactions: Record<string, StoryReaction>;
+  /** Audio e imagen (Fase 4b). Sin definir hasta que empieza la generación. */
+  media?: PanelMedia;
+}
+
+/**
+ * - `none`: no se genera (la viñeta venció sin texto).
+ * - `pending`: en la cola de generación.
+ * - `ready`: tiene audio (la imagen es opcional: puede no estar configurada o fallar sola).
+ * - `failed`: no se pudo generar el audio.
+ */
+export type PanelMediaStatus = 'none' | 'pending' | 'ready' | 'failed';
+
+/** Palabra narrada en el audio: ms desde el inicio y offsets (en caracteres) en `finalText`. */
+export interface SpeechMark {
+  time: number;
+  start: number;
+  end: number;
+  value: string;
+}
+
+/** Media de una viñeta. Se guardan las keys de S3; las URLs se firman al enviar. */
+export interface PanelMedia {
+  status: PanelMediaStatus;
+  audioKey: string | null;
+  imageKey: string | null;
+  speechMarks: SpeechMark[] | null;
 }
 
 /** Qué está haciendo el autor del turno en curso (`authorStatus`). */

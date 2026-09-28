@@ -1,8 +1,17 @@
 import { Correction } from '@/modules/language-review/language-review.types';
 import { StoryReaction } from '../story-game.config';
 import { castOf, closedPanels } from './story-turns';
-import type { AvatarUrls } from './story-game.views';
-import { PanelScore, StoryCharacter, StoryGame, StorySnapshot } from './story-game.types';
+import type { AvatarUrls, MediaUrls } from './story-game.views';
+import {
+  PanelMediaStatus,
+  PanelScore,
+  SpeechMark,
+  StoryCharacter,
+  StoryGame,
+  StorySnapshot,
+} from './story-game.types';
+
+export type { PanelMediaStatus, SpeechMark };
 
 /** Puntaje acumulado de un jugador: `scoreboard` de gameState y `ranking` del manifiesto. */
 export interface ScoreboardEntry {
@@ -14,17 +23,6 @@ export interface ScoreboardEntry {
   /** totalScore / panelsWritten, con un decimal; 0 si no escribió ninguna. */
   averageScore: number;
 }
-
-/** Palabra narrada en el audio (Polly, Fase 4b): ms desde el inicio y offsets en `finalText`. */
-export interface SpeechMark {
-  time: number;
-  start: number;
-  end: number;
-  value: string;
-}
-
-/** `none` = esta versión no genera media (Fase 4a). */
-export type PanelMediaStatus = 'none' | 'pending' | 'ready' | 'failed';
 
 export interface ReviewPanel {
   order: number;
@@ -82,17 +80,18 @@ export function scoreboardOf(game: StoryGame, avatars: AvatarUrls = {}): Scorebo
     );
 }
 
-/** Manifiesto a partir del estado en Redis. Sin media todavía: todo `none`. */
+/** Manifiesto a partir del estado en Redis, con las URLs ya firmadas de avatares y media. */
 export function toReviewManifest(
   snapshot: StorySnapshot,
   avatars: AvatarUrls = {},
+  media: MediaUrls = {},
 ): ReviewManifest {
   const { game } = snapshot;
   const nameOf = (userId: string) =>
     game.players.find((player) => player.userId === userId)?.username ?? '';
 
   return {
-    storyId: game.gameId,
+    storyId: game.storyId ?? game.gameId,
     gameId: game.gameId,
     characters: castOf(snapshot),
     ranking: scoreboardOf(game, avatars),
@@ -106,10 +105,10 @@ export function toReviewManifest(
       corrections: panel.drafts.at(-1)?.review?.corrections ?? [],
       score: panel.score!,
       reactions: panel.reactions ?? {},
-      audioUrl: null,
-      speechMarks: null,
-      imageUrl: null,
-      mediaStatus: 'none',
+      audioUrl: media[panel.order]?.audioUrl ?? null,
+      speechMarks: panel.media?.speechMarks ?? null,
+      imageUrl: media[panel.order]?.imageUrl ?? null,
+      mediaStatus: panel.media?.status ?? 'none',
     })),
   };
 }

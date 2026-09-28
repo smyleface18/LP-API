@@ -41,7 +41,7 @@ El prompt está en `prompts/review-system-prompt.v1.ts` (`REVIEW_PROMPT_VERSION 
 
 | Variable                  | Descripción                                                                                                   |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `BEDROCK_REVIEW_MODEL_ID` | Model ID o inference profile de Nova 2 Lite, tal como lo muestra el catálogo de Bedrock en la región (base: `amazon.nova-2-lite-v1:0`; los inference profiles llevan prefijo, ej. `us.`). No está en el código. |
+| `BEDROCK_REVIEW_MODEL_ID` | Model ID o inference profile de Nova 2 Lite, tal como lo muestra el catálogo de Bedrock en la región (ej. `us.amazon.nova-2-lite-v1:0`). Tiene que ser un inference profile: con el model ID base (`amazon.nova-2-lite-v1:0`) Bedrock responde "on-demand throughput isn't supported". No está en el código. |
 | `BEDROCK_REGION`          | Región de Bedrock. Vacía = `AWS_REGION`.                                                                      |
 
 Credenciales: la cadena estándar del SDK de AWS (variables `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, rol de la instancia o de la tarea, etc.). El código no crea ni asume credenciales.

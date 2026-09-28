@@ -9,13 +9,14 @@ import {
   LanguageReviewInput,
 } from '@/modules/language-review/language-review.types';
 import { StoryGameService } from '@/modules/story-game/story-game.service';
-import { StoryAvatars } from '@/modules/story-game/story-avatars.service';
+import { StoryUrlSigner } from '@/modules/story-game/story-url-signer.service';
 import {
   PanelGuardError,
   StoryChanges,
   StoryStateRepository,
 } from '@/modules/story-game/story-state.repository';
-import { StoryGame, StorySnapshot } from '@/modules/story-game/domain/story-game.types';
+import { PanelMedia, StoryGame, StorySnapshot } from '@/modules/story-game/domain/story-game.types';
+import { MediaRequestedEvent, STORY_EVENTS } from '@/modules/story-game/domain/story-game.events';
 import { StoryError, StoryErrorCode } from '@/modules/story-game/domain/story-game.errors';
 import {
   STORY_CANCEL_EVENT,
@@ -131,7 +132,11 @@ export function createStoryHarness(start = 1_800_000_000_000) {
   } as unknown as Repository<User>;
   const uniqueNames = { NamesGenerator: () => `game-${++nextName}` } as UniqueNamesAdapter;
 
-  const avatars = { urlsFor: jest.fn().mockResolvedValue({}) };
+  const urls = {
+    avatarsFor: jest.fn().mockResolvedValue({}),
+    mediaFor: jest.fn().mockResolvedValue({}),
+    signMedia: jest.fn().mockResolvedValue({ audioUrl: null, imageUrl: null }),
+  };
 
   const service = new StoryGameService(
     store as unknown as StoryStateRepository,
@@ -139,7 +144,7 @@ export function createStoryHarness(start = 1_800_000_000_000) {
     uniqueNames,
     events as unknown as EventEmitter2,
     reviewer as unknown as LanguageReviewer,
-    avatars as unknown as StoryAvatars,
+    urls as unknown as StoryUrlSigner,
   );
 
   /** Partida con `ids` en orden de entrada; el primero es el anfitrión. */
@@ -153,6 +158,31 @@ export function createStoryHarness(start = 1_800_000_000_000) {
     const gameId = await lobbyWith(...ids);
     await service.startStory(gameId, ids[0]);
     return gameId;
+  }
+
+  /**
+   * Hace lo que harían la cola `story-media` y su processor: cada viñeta
+   * pedida en `mediaRequested` que siga `pending` recibe `media(order)` (por
+   * defecto, audio listo sin imagen). `orders` limita a esas viñetas.
+   */
+  async function completeMedia(
+    media: (order: number) => PanelMedia = (order) => ({
+      status: 'ready',
+      audioKey: `story/s/panel-${order}.mp3`,
+      imageKey: null,
+      speechMarks: [],
+    }),
+    orders?: number[],
+  ) {
+    const requested = (events.emit.mock.calls as EmitCall[])
+      .filter(([name]) => name === STORY_EVENTS.mediaRequested)
+      .map(([, payload]) => payload as MediaRequestedEvent);
+    for (const { gameId, panels } of requested) {
+      for (const { order } of panels) {
+        if (orders && !orders.includes(order)) continue;
+        await service.onPanelMedia(gameId, order, media(order));
+      }
+    }
   }
 
   const snapshotOf = (gameId: string) => service.getSnapshot(gameId);
@@ -178,10 +208,11 @@ export function createStoryHarness(start = 1_800_000_000_000) {
     events,
     reviewer,
     users,
-    avatars,
+    urls,
     service,
     lobbyWith,
     playingWith,
+    completeMedia,
     snapshotOf,
     gameOf,
     emitted,

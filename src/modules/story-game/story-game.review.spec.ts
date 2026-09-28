@@ -57,12 +57,15 @@ describe('StoryGameService — end of the story (phase 4a)', () => {
 
   /**
    * Con el EventEmitter falso del harness los listeners no corren solos: esto
-   * hace lo que hace `@OnEvent(processingStarted)` en la app.
+   * hace lo que hace `@OnEvent(processingStarted)` en la app, y después la
+   * cola de media (ver story-game.media.spec.ts para el flujo en detalle).
    */
   async function runProcessing() {
     for (const event of h.emitted<ProcessingStartedEvent>(STORY_EVENTS.processingStarted)) {
       await service.onProcessingStarted(event);
     }
+    // Y lo que haría la cola `story-media`: toda la media lista.
+    await h.completeMedia();
   }
 
   /** El autor del turno en curso envía `input` y confirma. */
@@ -123,7 +126,9 @@ describe('StoryGameService — end of the story (phase 4a)', () => {
     expect(reviewReady()).toHaveLength(1);
 
     const { manifest } = reviewReady()[0];
-    expect(manifest).toMatchObject({ storyId: gameId, gameId });
+    const { storyId } = await h.gameOf(gameId);
+    expect(storyId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(manifest).toMatchObject({ storyId, gameId });
     expect(manifest.characters).toEqual([
       {
         id: 'ch-0-0',
@@ -156,16 +161,21 @@ describe('StoryGameService — end of the story (phase 4a)', () => {
         total: 70,
       },
       reactions: {},
+      // REVIEW llega con la media de la primera viñeta: el resto sigue en la
+      // cola y le llega a la sala por `panelMediaReady`.
       audioUrl: null,
       speechMarks: null,
       imageUrl: null,
-      mediaStatus: 'none',
+      mediaStatus: 'pending',
     });
+    expect(manifest.panels[0]).toMatchObject({ mediaStatus: 'ready', speechMarks: [] });
     expect(manifest.panels[1].characterIds).toEqual(['ch-0-0']);
+    // Venció sin texto: no hay nada que narrar.
     expect(manifest.panels[3]).toMatchObject({
       originalText: '',
       finalText: OUT_OF_TIME_TEXT,
       score: { total: 0 },
+      mediaStatus: 'none',
     });
   });
 
@@ -174,7 +184,7 @@ describe('StoryGameService — end of the story (phase 4a)', () => {
       ({ where: { id } }: { where: { id: string } }) =>
         Promise.resolve({ id, username: `name-${id}`, avatar: { key: `avatar/${id}.png` } }),
     );
-    h.avatars.urlsFor.mockResolvedValue({ bob: 'https://signed/bob' });
+    h.urls.avatarsFor.mockResolvedValue({ bob: 'https://signed/bob' });
     const gameId = await playScoredStory();
     await runProcessing();
 
@@ -185,7 +195,7 @@ describe('StoryGameService — end of the story (phase 4a)', () => {
       'avatar/carol.png',
     ]);
     const { ranking } = await service.getReviewManifest(gameId, 'alice');
-    expect(h.avatars.urlsFor).toHaveBeenLastCalledWith(game.players);
+    expect(h.urls.avatarsFor).toHaveBeenLastCalledWith(game.players);
     expect(ranking.map((entry) => [entry.userId, entry.avatarUrl])).toEqual([
       ['bob', 'https://signed/bob'],
       ['alice', null],
@@ -309,7 +319,8 @@ describe('StoryGameService — end of the story (phase 4a)', () => {
       await runProcessing();
 
       await expect(service.getReviewManifest(gameId, 'carol')).resolves.toMatchObject({
-        storyId: gameId,
+        storyId: (await h.gameOf(gameId)).storyId,
+        gameId,
       });
     });
 

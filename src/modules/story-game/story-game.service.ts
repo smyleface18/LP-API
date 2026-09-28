@@ -12,12 +12,18 @@ import {
 } from '@/modules/language-review/language-review.types';
 import { PanelGuardError, StoryChanges, StoryStateRepository } from './story-state.repository';
 import { StoryError } from './domain/story-game.errors';
-import { StoryAvatars } from './story-avatars.service';
-import { ProcessingStartedEvent, STORY_EVENTS, StoryOutboxItem } from './domain/story-game.events';
+import { StoryUrlSigner } from './story-url-signer.service';
+import {
+  PanelMediaRequestEvent,
+  ProcessingStartedEvent,
+  STORY_EVENTS,
+  StoryOutboxItem,
+} from './domain/story-game.events';
 import { ReviewManifest, toReviewManifest } from './domain/story-review';
 import {
   DraftInput,
   PanelConfirmedBy,
+  PanelMedia,
   PanelState,
   STORY_ABANDONABLE_STATUSES,
   STORY_ENDED_STATUSES,
@@ -44,6 +50,7 @@ import { REVIEW_TIMEOUT_MS } from '@/modules/language-review/language-review.con
 import {
   FINISHED_STORY_TTL_MS,
   IDLE_ABANDON_DELAY_MS,
+  MEDIA_DEADLINE_MS,
   MAX_DRAFTS_PER_TURN,
   MAX_REVIEW_ATTEMPTS,
   REVIEW_CLOSE_GRACE_MS,
@@ -51,6 +58,7 @@ import {
   STORY_DEFAULT_CONFIG,
   STORY_MAX_PLAYERS,
   STORY_MIN_PLAYERS,
+  STORY_MIN_PLAYERS_TO_CONTINUE,
   StoryReaction,
 } from './story-game.config';
 import { STORY_CANCEL_EVENT, STORY_SCHEDULE_EVENT, StoryJob, storyJobId } from './queue/type';
@@ -76,7 +84,7 @@ export class StoryGameService {
     private readonly uniqueNames: UniqueNamesAdapter,
     private readonly eventEmitter: EventEmitter2,
     private readonly reviewer: LanguageReviewer,
-    private readonly avatars: StoryAvatars,
+    private readonly urls: StoryUrlSigner,
   ) {}
 
   async createGame(userId: string): Promise<StorySnapshot> {
@@ -108,6 +116,8 @@ export class StoryGameService {
         abandonAt: null,
         abandonSeq: 0,
         createdAt: now,
+        storyId: null,
+        mediaDeadlineAt: null,
       };
 
       // create() no pisa una partida existente con el mismo id.
@@ -445,18 +455,143 @@ export class StoryGameService {
 
   /**
    * Punto único de la generación de la historieta: corre al entrar a PROCESSING.
-   *
-   * Fase 4a: sin media, pasa de inmediato a REVIEW y a FINISHED. En la 4b acá
-   * se encola el flow `story-generation` de BullMQ: REVIEW llega cuando la
-   * viñeta 1 tiene su media y FINISHED cuando termina el flow.
+   * Pide la media de cada viñeta (cola `story-media`). REVIEW llega cuando la
+   * primera viñeta tiene su media y FINISHED cuando la tienen todas (o vence
+   * MEDIA_DEADLINE_MS). Sin nada que generar, pasa de largo a FINISHED.
    */
   @OnEvent(STORY_EVENTS.processingStarted, { async: true, promisify: true })
   async onProcessingStarted({ gameId }: ProcessingStartedEvent): Promise<void> {
     try {
-      await this.enterReview(gameId);
-      await this.finishStory(gameId);
+      await this.requestMedia(gameId);
+      await this.advanceAfterMedia(gameId);
     } catch (error) {
       this.logger.error(`story ${gameId}: processing failed: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Asigna el `storyId`, marca cada viñeta confirmada como `pending` (o `none`
+   * si venció sin texto) y emite `mediaRequested`. Idempotente: solo corre una
+   * vez por partida (la segunda ve el `storyId`).
+   */
+  async requestMedia(gameId: string): Promise<void> {
+    await this.mutate(gameId, (snapshot, outbox) => {
+      const { game } = snapshot;
+      if (game.status !== StoryStatus.PROCESSING || game.storyId !== null) return null;
+
+      const storyId = randomUUID();
+      game.storyId = storyId;
+      const panels = closedPanels(snapshot);
+      const requests: PanelMediaRequestEvent[] = [];
+      for (const panel of panels) {
+        const hasText = !!panel.originalText;
+        panel.media = {
+          status: hasText ? 'pending' : 'none',
+          audioKey: null,
+          imageKey: null,
+          speechMarks: null,
+        };
+        if (!hasText) continue;
+        requests.push({
+          gameId,
+          storyId,
+          order: panel.order,
+          text: panel.finalText ?? '',
+          scene: panel.scene ?? '',
+          characters: panel.characterIds
+            .map((id) => snapshot.characters[id])
+            .filter((character) => !!character)
+            .map(({ name, kind, description }) => ({ name, kind, description })),
+          languageCode: game.config.language,
+        });
+      }
+
+      if (requests.length > 0) {
+        game.mediaDeadlineAt = Date.now() + MEDIA_DEADLINE_MS;
+        outbox.push({ event: STORY_EVENTS.mediaRequested, payload: { gameId, panels: requests } });
+      }
+      outbox.push({
+        event: STORY_EVENTS.processing,
+        payload: { gameId, panelsTotal: requests.length, panelsDone: 0 },
+      });
+      return { game, setPanels: panels };
+    });
+  }
+
+  /**
+   * Resultado de la media de una viñeta (StoryMediaProcessor). Se descarta si
+   * la viñeta ya no está `pending` (ej. venció el plazo): el primer resultado gana.
+   */
+  async onPanelMedia(gameId: string, order: number, media: PanelMedia): Promise<void> {
+    await this.mutate(gameId, (snapshot, outbox) => {
+      const panel = snapshot.panels[order];
+      if (panel?.media?.status !== 'pending') return null;
+
+      panel.media = media;
+      this.afterMediaSettled(snapshot, [panel], outbox);
+      return { game: snapshot.game, setPanels: [panel] };
+    });
+    await this.advanceAfterMedia(gameId);
+  }
+
+  /** Tarea `media-deadline`: lo que siga `pending` queda `failed` y la partida avanza. */
+  async expireMedia(gameId: string, dueAt: number): Promise<void> {
+    await this.mutate(gameId, (snapshot, outbox) => {
+      if (snapshot.game.mediaDeadlineAt !== dueAt) return null;
+
+      const expired = closedPanels(snapshot).filter((panel) => panel.media?.status === 'pending');
+      for (const panel of expired) {
+        panel.media = { status: 'failed', audioKey: null, imageKey: null, speechMarks: null };
+      }
+      this.logger.warn(`story ${gameId}: media deadline expired (${expired.length} pending)`);
+      this.afterMediaSettled(snapshot, expired, outbox);
+      snapshot.game.mediaDeadlineAt = null;
+      return { game: snapshot.game, setPanels: expired };
+    });
+    await this.advanceAfterMedia(gameId);
+  }
+
+  /** Eventos de las viñetas que terminaron; sin nada pendiente se quita el plazo. */
+  private afterMediaSettled(
+    snapshot: StorySnapshot,
+    settled: PanelState[],
+    outbox: StoryOutboxItem[],
+  ) {
+    const { game } = snapshot;
+    for (const panel of settled) {
+      outbox.push({
+        event: STORY_EVENTS.panelMediaReady,
+        payload: { gameId: game.gameId, order: panel.order, media: panel.media! },
+      });
+    }
+    const withMedia = closedPanels(snapshot).filter((p) => p.media && p.media.status !== 'none');
+    const done = withMedia.filter((p) => p.media!.status !== 'pending').length;
+    if (done === withMedia.length) game.mediaDeadlineAt = null;
+    if (game.status === StoryStatus.PROCESSING) {
+      outbox.push({
+        event: STORY_EVENTS.processing,
+        payload: { gameId: game.gameId, panelsTotal: withMedia.length, panelsDone: done },
+      });
+    }
+  }
+
+  /**
+   * PROCESSING -> REVIEW cuando la primera viñeta ya no está pendiente, y
+   * REVIEW -> FINISHED cuando ninguna lo está. Una viñeta sin `media` (partida
+   * de antes de la Fase 4b) cuenta como terminada.
+   */
+  private async advanceAfterMedia(gameId: string): Promise<void> {
+    const pending = (snapshot: StorySnapshot) =>
+      closedPanels(snapshot).filter((panel) => panel.media?.status === 'pending');
+
+    let snapshot = await this.getSnapshot(gameId);
+    const [first] = closedPanels(snapshot);
+    if (snapshot.game.status === StoryStatus.PROCESSING && first?.media?.status !== 'pending') {
+      await this.enterReview(gameId);
+      snapshot = await this.getSnapshot(gameId);
+    }
+    if (snapshot.game.status === StoryStatus.REVIEW && pending(snapshot).length === 0) {
+      await this.finishStory(gameId);
     }
   }
 
@@ -494,6 +629,7 @@ export class StoryGameService {
 
       game.status = StoryStatus.FINISHED;
       outbox.push({ event: STORY_EVENTS.stateChanged, payload: { snapshot } });
+      outbox.push({ event: STORY_EVENTS.finished, payload: { snapshot } });
       this.logger.log(`story ${gameId} finished`);
       return { game };
     });
@@ -510,7 +646,11 @@ export class StoryGameService {
     if (game.status !== StoryStatus.REVIEW && game.status !== StoryStatus.FINISHED) {
       throw StoryError.invalidState('get the review', game.status);
     }
-    return toReviewManifest(snapshot, await this.avatars.urlsFor(game.players));
+    const [avatars, media] = await Promise.all([
+      this.urls.avatarsFor(game.players),
+      this.urls.mediaFor(closedPanels(snapshot)),
+    ]);
+    return toReviewManifest(snapshot, avatars, media);
   }
 
   /** Estado completo de la partida tal como lo ve este jugador (reconexión). */
@@ -519,7 +659,7 @@ export class StoryGameService {
     if (!gameId) throw new StoryError('NOT_IN_GAME', 'Join a story game first');
     const snapshot = await this.getSnapshot(gameId);
     this.assertActivePlayer(snapshot.game, userId);
-    return toGameStateView(snapshot, userId, await this.avatars.urlsFor(snapshot.game.players));
+    return toGameStateView(snapshot, userId, await this.urls.avatarsFor(snapshot.game.players));
   }
 
   /**
@@ -683,6 +823,17 @@ export class StoryGameService {
       });
     }
     if (
+      game.mediaDeadlineAt !== null &&
+      (game.status === StoryStatus.PROCESSING || game.status === StoryStatus.REVIEW)
+    ) {
+      jobs.push({
+        gameId: game.gameId,
+        kind: 'media-deadline',
+        seq: 0,
+        dueAt: game.mediaDeadlineAt,
+      });
+    }
+    if (
       game.status === StoryStatus.PLAYING &&
       game.currentPanel !== null &&
       game.turnCloseAt !== null
@@ -774,8 +925,9 @@ export class StoryGameService {
   }
 
   /**
-   * Un jugador abandonó en PLAYING. Con menos de 2 jugadores sin abandonar, la
-   * partida termina con las viñetas ya confirmadas. Si no, y era el autor del
+   * Un jugador abandonó en PLAYING. Con menos de STORY_MIN_PLAYERS_TO_CONTINUE
+   * jugadores sin abandonar (o nadie, si empezó sola), la partida termina con
+   * las viñetas ya confirmadas. Si no, y era el autor del
    * turno, la viñeta se reasigna de inmediato al siguiente (con turno nuevo).
    */
   private afterPlayerLeftTurns(
@@ -786,7 +938,8 @@ export class StoryGameService {
     const { game } = snapshot;
     const current = game.currentPanel === null ? undefined : snapshot.panels[game.currentPanel];
 
-    if (remainingPlayers(game).length < STORY_MIN_PLAYERS) {
+    const minToContinue = Math.min(STORY_MIN_PLAYERS_TO_CONTINUE, game.players.length);
+    if (remainingPlayers(game).length < minToContinue) {
       const changes: StoryChanges = {};
       if (current?.status === 'open') {
         delete snapshot.panels[current.order];

@@ -1,8 +1,8 @@
 # StoryGameModule: modo Historieta (`/story`)
 
-Varios jugadores escriben una historieta en inglés, una viñeta por turno. Los personajes se crean durante los turnos. Este módulo tiene el namespace de Socket.IO `/story`, la máquina de estados, el estado compartido en Redis y las tareas diferidas en BullMQ.
+Uno o varios jugadores escriben una historieta en inglés, una viñeta por turno (si juega uno solo, escribe todas). Los personajes se crean durante los turnos. Este módulo tiene el namespace de Socket.IO `/story`, la máquina de estados, el estado compartido en Redis y las tareas diferidas en BullMQ.
 
-Estado actual: **Fase 4a** (lobby, turnos y personajes, revisión de inglés con IA, puntuación, reacciones y cierre de la partida con el manifiesto del review). Sin audio ni imágenes todavía (Fase 4b) y sin persistencia en Postgres (Fase 4c).
+Estado actual: **Fase 4c** (lobby, turnos y personajes, revisión de inglés con IA, puntuación, reacciones, review con audio narrado e imágenes, e historial en Postgres). La media la genera `src/modules/story-media/` y el historial vive en `src/modules/story-history/`; ver sus README.
 
 ## Archivos
 
@@ -13,12 +13,12 @@ Estado actual: **Fase 4a** (lobby, turnos y personajes, revisión de inglés con
 | `domain/story-turns.ts`     | Reglas de los turnos como funciones puras: autor, apertura, cierre, validación.       |
 | `domain/story-review.ts`    | Manifiesto del review y marcador (`scoreboard`/`ranking`), como funciones puras.      |
 | `story-state.repository.ts` | Lectura/escritura en Redis (hashes, scripts Lua con guarda, referencia usuario → partida). |
-| `story-avatars.service.ts`  | Firma las URLs de los avatares de los jugadores al enviar las vistas (con caché).     |
+| `story-url-signer.service.ts` | Firma las URLs de avatares y media (keys de S3) al enviar las vistas, con caché.   |
 | `story-game.config.ts`      | Todos los números del modo (jugadores, rangos, límites de texto y personajes).        |
 | `domain/`                   | Tipos, errores (`StoryError` con `code`), eventos internos y vistas para el cliente.  |
 | `dto/`                      | DTOs de los eventos con `class-validator`.                                            |
 | `story-validation.pipe.ts`  | `ValidationPipe` del gateway; los errores salen como `VALIDATION_ERROR`.               |
-| `queue/`                    | Cola BullMQ `story-turn-timeout`: tareas diferidas con el patrón `dueAt + seq`.        |
+| `queue/`                    | Colas BullMQ: `story-turn-timeout` (tareas diferidas, patrón `dueAt + seq`) y `story-media` (una tarea por viñeta). |
 
 La revisión de inglés la hace `LanguageReviewer` (`src/modules/language-review/`), una clase abstracta que sirve de token de inyección; la implementación es `LanguageReviewService` (Nova 2 Lite en Bedrock). Ver su README.
 
@@ -29,19 +29,20 @@ LOBBY → PLAYING → PROCESSING → REVIEW → FINISHED
 LOBBY/PLAYING → ABANDONED (nadie conectado durante 60 s, o ya nadie puede volver)
 ```
 
-PROCESSING y REVIEW nunca se abandonan: la historieta se termina de generar y se guarda en el historial aunque todos se hayan ido. En la Fase 4a PROCESSING → REVIEW → FINISHED es inmediato (ver Fin de la partida).
+PROCESSING y REVIEW nunca se abandonan: la historieta se termina de generar y se guarda en el historial aunque todos se hayan ido. PROCESSING dura hasta que la primera viñeta tiene su media, y REVIEW hasta que la tienen todas (ver Fin de la partida).
 
 Solo el servidor cambia el estado. Un evento que no corresponde al estado actual devuelve `INVALID_STATE`.
 
 ## Estado en Redis
 
-TTL: `MATCH_TTL` (se renueva en cada escritura). Una partida FINISHED usa `FINISHED_STORY_TTL_MS` (24 h), también en las escrituras posteriores (reacciones), para poder servir su manifiesto hasta que exista la persistencia (Fase 4c). Todas las claves de una partida comparten el hash tag `{gameId}`.
+TTL: `MATCH_TTL` (se renueva en cada escritura). Una partida FINISHED usa `FINISHED_STORY_TTL_MS` (24 h), también en las escrituras posteriores (reacciones), para servir el review en vivo por socket; después solo queda en Postgres (`GET /story/history/:storyId`). Todas las claves de una partida comparten el hash tag `{gameId}`.
 
 ```text
 story:{gameId}              hash: status, hostId, config (json), players (json, en orden de entrada, con avatarKey),
-                            currentPanel, turnEndsAt, turnCloseAt, abandonAt, abandonSeq, createdAt
+                            currentPanel, turnEndsAt, turnCloseAt, abandonAt, abandonSeq, createdAt,
+                            storyId, mediaDeadlineAt
 story:{gameId}:characters   hash: characterId → { id, name, kind, description, createdBy, introducedInPanel }
-story:{gameId}:panels       hash: order → viñeta (PanelState, json)
+story:{gameId}:panels       hash: order → viñeta (PanelState, json, con `media`: status y keys de S3)
 story:{gameId}:lock         lock de la partida (RedisLockService)
 user:{userId}:story         partida activa del usuario (reconexión, una partida a la vez)
 ```
@@ -55,11 +56,11 @@ La guarda es lo que hace que un turno se cierre **una sola vez**: confirmar y el
 
 El elenco solo crece: los personajes son inmutables una vez agregados, porque otras viñetas dependen de ellos. Su id es `ch-{viñeta}-{índice}`.
 
-## Avatares
+## Avatares y media (URLs firmadas)
 
-Cada jugador guarda en Redis la **key** de S3 de su avatar (`avatarKey`, tomada del `User` al crear, unirse o reconectarse con `joinStoryGame`), nunca la URL: las URLs firmadas vencen y una partida terminada vive 24 h. `StoryAvatars.urlsFor(players)` firma las keys al enviar cada vista y devuelve `userId → URL`; las vistas llevan `avatarUrl` (`null` si no tiene avatar o no se pudo firmar, lo que nunca frena la partida).
+Cada jugador guarda en Redis la **key** de S3 de su avatar (`avatarKey`, tomada del `User` al crear, unirse o reconectarse con `joinStoryGame`), y cada viñeta las keys de su audio e imagen (`media.audioKey`, `media.imageKey`); nunca las URLs: las URLs firmadas vencen y una partida terminada vive 24 h. `StoryUrlSigner` firma las keys al enviar cada vista: `avatarsFor(players)` devuelve `userId → URL` y `mediaFor(panels)` `order → { audioUrl, imageUrl }`. Una key que no se puede firmar sale `null`, lo que nunca frena la partida.
 
-Cada URL dura `AVATAR_URL_TTL_SEC` (2 h) y se reutiliza mientras le quede al menos `AVATAR_URL_MIN_REMAINING_MS` (30 min): así el cliente no recarga la imagen en cada `lobbyUpdated`. La caché es por instancia. En el review, el cliente puede volver a pedir `getReviewManifest` para URLs nuevas.
+Cada URL dura `SIGNED_URL_TTL_SEC` (2 h) y se reutiliza mientras le quede al menos `SIGNED_URL_MIN_REMAINING_MS` (30 min): así el cliente no recarga la imagen o el audio en cada evento. La caché es por instancia. En el review, el cliente puede volver a pedir `getReviewManifest` para URLs nuevas.
 
 Llevan `avatarUrl`: los jugadores de `lobbyUpdated` (y de `gameState.lobby`), `gameState.scoreboard` y el `ranking` del manifiesto.
 
@@ -73,6 +74,7 @@ Mismo patrón que la trivia (`GameTimeoutQueue`): el servicio emite `story.sched
 | -------------- | ------------ | ----------------------------------------------------------- | ------------------------------------------------ |
 | `abandon-idle` | `abandonSeq` | LOBBY/PLAYING, mismo `abandonSeq`, nadie conectado          | Pasa a ABANDONED.                                |
 | `close-turn`   | viñeta       | PLAYING, `currentPanel = seq`, `turnCloseAt = dueAt`, abierta | Cierra el turno por tiempo (confirma o rellena), o lo difiere si hay una revisión en curso. |
+| `media-deadline` | 0          | PROCESSING/REVIEW, `mediaDeadlineAt = dueAt`                | Las viñetas que sigan `pending` quedan `failed` y la partida avanza a REVIEW/FINISHED. |
 
 `turnEndsAt` es el fin del turno que ven los clientes. `turnCloseAt` es cuándo corre `close-turn`: normalmente es igual, salvo cuando el turno vence con una revisión en curso (ver Turnos, punto 4).
 
@@ -126,16 +128,21 @@ Validación del borrador: el DTO valida forma y largos (`MAX_CHARS_PER_PANEL`, `
 Jugadores que se van durante PLAYING:
 
 - **Desconexión**: el turno sigue corriendo. Al volver, el jugador recibe `gameState`.
-- **Abandono** (`leaveGame`): si era el autor del turno, la viñeta se reasigna de inmediato al siguiente jugador conectado (turno nuevo, con su tiempo completo). Si quedan menos de 2 jugadores sin abandonar (los desconectados cuentan), la partida pasa a PROCESSING con las viñetas confirmadas; si no había ninguna, se abandona.
+- **Abandono** (`leaveGame`): si era el autor del turno, la viñeta se reasigna de inmediato al siguiente jugador conectado (turno nuevo, con su tiempo completo). Si quedan menos de `STORY_MIN_PLAYERS_TO_CONTINUE` (2) jugadores sin abandonar (los desconectados cuentan), la partida pasa a PROCESSING con las viñetas confirmadas; si no había ninguna, se abandona. Una partida individual termina así cuando su jugador sale.
 
-## Fin de la partida (Fase 4a)
+## Fin de la partida y media (Fase 4b)
 
 Al cerrarse la última viñeta (o al quedar menos de 2 jugadores), la partida pasa a PROCESSING y el servicio emite el evento interno `story.processing-started`. `StoryGameService.onProcessingStarted` (`@OnEvent`) es el **único punto** de la generación:
 
-1. `enterReview`: PROCESSING → REVIEW. Emite `lobbyUpdated` y `storyReviewReady` con el manifiesto a la sala, y libera `user:{userId}:story` de todos los jugadores (solo si todavía apunta a esta partida). Desde ahí pueden crear o unirse a otra partida sin `ALREADY_IN_GAME`.
-2. `finishStory`: REVIEW → FINISHED y TTL de 24 h.
+1. `requestMedia`: asigna el `storyId` (un UUID: es el id del historial en Postgres), marca cada viñeta confirmada como `pending` (o `none` si venció sin texto), fija `mediaDeadlineAt = ahora + MEDIA_DEADLINE_MS` (3 min) y emite `story.media-requested`. Idempotente: si ya hay `storyId`, no hace nada.
+2. `StoryMediaQueue` crea una tarea por viñeta en la cola `story-media` (id fijo `{gameId}__media__{order}`, la primera viñeta primero). `StoryMediaProcessor` (concurrencia `STORY_MEDIA_CONCURRENCY` = 2) llama a `StoryMediaService.generatePanel` y le pasa el resultado a `onPanelMedia`.
+3. `onPanelMedia` guarda la media de la viñeta solo si sigue `pending` (el primer resultado gana) y emite `story.panel-media-ready` y el avance (`story.processing`).
+4. `advanceAfterMedia`, después de cada resultado:
+   - PROCESSING → REVIEW (`enterReview`) cuando la **primera** viñeta ya no está pendiente. Emite `lobbyUpdated` y `storyReviewReady` con el manifiesto a la sala, y libera `user:{userId}:story` de todos los jugadores (solo si todavía apunta a esta partida). Desde ahí pueden crear o unirse a otra partida sin `ALREADY_IN_GAME`. Las viñetas que faltan le llegan a la sala por `panelMediaReady`.
+   - REVIEW → FINISHED (`finishStory`) cuando **ninguna** está pendiente. TTL de 24 h y evento `story.finished`, con el que `StoryHistoryService` la guarda en Postgres (Fase 4c).
+5. Si vence el plazo (`media-deadline`), lo pendiente queda `failed` y la partida avanza igual: una cola caída, una tarea perdida o AWS sin responder nunca dejan una partida en PROCESSING.
 
-Las dos transiciones son idempotentes (solo actúan desde el estado anterior). En la Fase 4b, `onProcessingStarted` encola el flow `story-generation`: REVIEW llega cuando la viñeta 1 tiene su media y FINISHED cuando termina el flow.
+Una viñeta es `ready` si tiene audio (la imagen es opcional: sin `BEDROCK_IMAGE_MODEL_ID` no se dibuja, y si falla sola no importa) y `failed` si no. Sin ninguna viñeta con texto no se pide nada y la partida pasa directo a FINISHED. Las transiciones son idempotentes (solo actúan desde el estado anterior).
 
 Como la partida ya no es la activa del usuario, `getReviewManifest` y `reactToPanel` reciben el `gameId`. `getReviewManifest` funciona en REVIEW y FINISHED para cualquier participante (incluso si salió), y mete al socket en la sala para recibir `panelReaction`. Tras el TTL responde `GAME_NOT_FOUND`.
 
@@ -143,7 +150,7 @@ Como la partida ya no es la activa del usuario, `getReviewManifest` y `reactToPa
 
 ```ts
 {
-  storyId: string;            // = gameId hasta la Fase 4c
+  storyId: string;            // id en Postgres (GET /story/history/:storyId)
   gameId: string;
   characters: {               // elenco, en orden de creación
     id: string; name: string; kind: string; description: string;
@@ -167,10 +174,11 @@ Como la partida ya no es la activa del usuario, `getReviewManifest` y `reactToPa
     corrections: Correction[];          // de la última revisión (las que puntúan)
     score: PanelScore;                  // { accuracy, firstTryBonus, selfCorrectionBonus, timeoutPenalty, total }
     reactions: Record<string, string>;  // userId → emoji
-    audioUrl: string | null;            // Fase 4a: null
-    speechMarks: { time: number; start: number; end: number; value: string }[] | null; // 4a: null
+    audioUrl: string | null;            // mp3 firmado; null si no hay audio (todavía o nunca)
+    // Una marca por palabra: ms desde el inicio del audio y offsets en caracteres de finalText.
+    speechMarks: { time: number; start: number; end: number; value: string }[] | null;
     imageUrl: string | null;            // null hasta que haya un ImageGenerator real
-    mediaStatus: 'none' | 'pending' | 'ready' | 'failed'; // Fase 4a: 'none'
+    mediaStatus: 'none' | 'pending' | 'ready' | 'failed'; // none = venció sin texto
   }[];
 }
 ```
@@ -207,7 +215,9 @@ Los errores van por el ack si el cliente lo envió; si no, por `storyError`: `{ 
 | `panelDraftReviewed`| servidor → sala menos el autor | Con `shareDrafts`: `{ order, authorId, text, scene, characterIds, newCharacters, reviewAvailable, corrections, characterCorrections }`. Nunca el texto corregido ni un borrador `flagged`. |
 | `panelReaction`     | servidor → sala     | `{ gameId, order, userId, emoji \| null }`                                                |
 | `panelConfirmed`    | servidor → sala     | `{ order, authorId, finalText, scene, characterIds, newCharacters, score, confirmedBy }` |
-| `storyReviewReady`  | servidor → sala     | Manifiesto, al entrar a REVIEW.                                                          |
+| `storyProcessing`   | servidor → sala     | En PROCESSING: `{ gameId, panelsTotal, panelsDone }` (avance de la media).              |
+| `storyReviewReady`  | servidor → sala     | Manifiesto, al entrar a REVIEW (con la media de la primera viñeta).                      |
+| `panelMediaReady`   | servidor → sala     | `{ gameId, order, mediaStatus, audioUrl, imageUrl, speechMarks }`: una viñeta terminó su media (URLs firmadas). |
 | `gameState`         | servidor → jugador  | `GameStateView`, al reconectarse.                                                        |
 | `storyError`        | servidor → emisor   | `{ ok: false, status, message, code }`                                                   |
 
@@ -223,7 +233,7 @@ El cliente pide las reglas una vez (no dependen de la partida ni del usuario) y 
 
 ```ts
 {
-  players: { min: 2, max: 6 },
+  players: { min: 1, max: 6 },
   config: {
     panelsCount: { min: 4, max: 10 },
     turnDurationsSec: [60, 90, 120, 180],
@@ -245,7 +255,7 @@ El servidor sigue validando todo; las reglas son para que la interfaz no deje ar
 ## Reglas del lobby y la conexión
 
 - Configuración por defecto: 6 viñetas, 90 s por turno, nivel A2, `en-US`, `shareDrafts: true`. Rangos en `story-game.config.ts`.
-- 2 a 6 jugadores. `startStory` exige al menos 2 jugadores conectados y `panelsCount >= cantidad de jugadores` (todos escriben al menos una viñeta; los desconectados también cuentan).
+- 1 a 6 jugadores (con uno, es una partida individual). `startStory` exige al menos 1 jugador conectado y `panelsCount >= cantidad de jugadores` (todos escriben al menos una viñeta; los desconectados también cuentan).
 - Un usuario no puede estar en dos partidas activas a la vez (`ALREADY_IN_GAME`).
 - Desconexión: el jugador queda `connected: false` y vuelve al reconectarse (a cualquier instancia).
 - Si el anfitrión se desconecta o sale, el anfitrión pasa al siguiente jugador conectado en orden (circular). No se devuelve al reconectarse. Si no había nadie conectado, lo recibe el primero que vuelve.
@@ -259,10 +269,12 @@ El servidor sigue validando todo; las reglas son para que la interfaz no deje ar
 - `domain/story-score.spec.ts`: `calculatePanelScore` (primer intento perfecto, autocorrección, timeout, sin texto, IA caída).
 - `story-game.sharing.spec.ts`: `authorStatus`, `panelDraftReviewed` (sin texto corregido, no `flagged`, `shareDrafts: false`) y reacciones.
 - `story-game.review.spec.ts`: fin de la partida: última viñeta → `storyReviewReady` → FINISHED, manifiesto, ranking por promedio, jugadores liberados al entrar a REVIEW, TTL de 24 h, `getReviewManifest` y `scoreboard`.
-- `story-game.timers.spec.ts`: una tarea de la cola llega hasta `server.to(gameId).emit` (módulo de Nest real con `EventEmitterModule`).
+- `story-game.media.spec.ts`: media: `storyId`, viñetas `pending`/`none`, REVIEW con la primera viñeta, FINISHED con la última, resultados tardíos descartados, plazo vencido y partida sin texto.
+- `story-game.timers.spec.ts`: una tarea de la cola llega hasta `server.to(gameId).emit` (módulo de Nest real con `EventEmitterModule`), y PROCESSING → REVIEW → FINISHED con un worker de media falso.
 - `test/story-game/story-harness.ts`: Redis en memoria (emula el script Lua con guarda), reloj controlado y dependencias falsas, compartido por los dos specs anteriores.
 - `story-state.repository.spec.ts`: formato de las claves y de los scripts, con el cliente Redis mockeado. Incluye un bloque contra un Redis real (scripts Lua y guarda) que se salta si no hay `REDIS_TEST_URL`.
 - `queue/story-timeout.queue.spec.ts`: id fijo de la tarea, delay y cancelación.
-- `story-avatars.service.spec.ts`: firma de las keys, reutilización de la URL según el tiempo que le queda y avatares que no se pueden firmar.
-- `story-game.gateway.spec.ts`: salas personales, partida leída de Redis, `KICKED`, resultado de revisión solo al autor, borradores a la sala menos el autor, reacciones, eventos de turno, avatares firmados (nunca la key), orden de las emisiones con una firma lenta y `getStoryRules`.
+- `queue/story-media.queue.spec.ts`: una tarea por viñeta con id fijo, y el processor que le pasa el resultado al servicio.
+- `story-url-signer.service.spec.ts`: firma de avatares y media, reutilización de la URL según el tiempo que le queda y keys que no se pueden firmar.
+- `story-game.gateway.spec.ts`: salas personales, partida leída de Redis, `KICKED`, resultado de revisión solo al autor, borradores a la sala menos el autor, reacciones, eventos de turno, avatares firmados (nunca la key), orden de las emisiones con una firma lenta, `storyProcessing`, `panelMediaReady` (media firmada) y `getStoryRules`.
 - `dto/story-dtos.spec.ts`: rangos de configuración y payloads a través del pipe del gateway.

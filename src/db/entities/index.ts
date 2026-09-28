@@ -6,3 +6,6 @@ export * from './user.entity';
 export * from './game-session.entity';
 export * from './player-answer.entity';
 export * from './media-asset.entity';
+export * from './story.entity';
+export * from './story-panel.entity';
+export * from './story-participant.entity';

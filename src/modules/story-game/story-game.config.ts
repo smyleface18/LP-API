@@ -6,7 +6,13 @@ import { REVIEW_TIMEOUT_MS } from '@/modules/language-review/language-review.con
  * no repetir estos números en otro lado.
  */
 
-export const STORY_MIN_PLAYERS = 2;
+/** Se puede jugar solo: el jugador escribe todas las viñetas. */
+export const STORY_MIN_PLAYERS = 1;
+/**
+ * Una partida que empezó con varios jugadores termina (con las viñetas ya
+ * confirmadas) cuando quedan menos de estos sin abandonar.
+ */
+export const STORY_MIN_PLAYERS_TO_CONTINUE = 2;
 export const STORY_MAX_PLAYERS = 6;
 
 export const STORY_PANELS_MIN = 4;
@@ -43,12 +49,19 @@ export const IDLE_ABANDON_DELAY_MS = 60_000;
 export const FINISHED_STORY_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
- * URLs firmadas de los avatares: duran 2 h y se reutilizan mientras les quede
- * al menos 30 min, para que el cliente no recargue la imagen en cada
- * `lobbyUpdated` y la URL que recibe siga valiendo un buen rato.
+ * URLs firmadas (avatares y media de las viñetas): duran 2 h y se reutilizan
+ * mientras les quede al menos 30 min, para que el cliente no recargue la
+ * imagen o el audio en cada evento y la URL que recibe siga valiendo un rato.
  */
-export const AVATAR_URL_TTL_SEC = 2 * 60 * 60;
-export const AVATAR_URL_MIN_REMAINING_MS = 30 * 60 * 1000;
+export const SIGNED_URL_TTL_SEC = 2 * 60 * 60;
+export const SIGNED_URL_MIN_REMAINING_MS = 30 * 60 * 1000;
+
+/**
+ * Plazo de la generación de media (audio e imagen de todas las viñetas). Al
+ * vencer, lo que siga pendiente queda `failed` y la historieta se termina igual:
+ * una cola caída o una tarea perdida nunca dejan la partida en PROCESSING.
+ */
+export const MEDIA_DEADLINE_MS = 3 * 60_000;
 
 /** Revisiones de IA que puede usar un jugador en su viñeta. */
 export const MAX_REVIEW_ATTEMPTS = 2;

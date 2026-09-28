@@ -5,7 +5,7 @@ export const STORY_SCHEDULE_EVENT = 'story.schedule';
 /** Borrar una tarea que quedó obsoleta. Solo limpieza: la tarea igual se descarta sola por `seq`. */
 export const STORY_CANCEL_EVENT = 'story.cancel';
 
-export type StoryJobKind = 'abandon-idle' | 'close-turn';
+export type StoryJobKind = 'abandon-idle' | 'close-turn' | 'media-deadline';
 
 /**
  * Paso programado de una partida de Historieta (mismo patrón que GameJob de la
@@ -17,6 +17,8 @@ export type StoryJobKind = 'abandon-idle' | 'close-turn';
  * - close-turn: seq = número de viñeta; dueAt = `turnCloseAt` (el fin del
  *   turno, o el respaldo si venció con una revisión en curso). Si la viñeta
  *   se reasignó (su autor abandonó), el turno nuevo tiene otro dueAt.
+ * - media-deadline: seq = 0; dueAt = `mediaDeadlineAt`. Las viñetas que sigan
+ *   `pending` pasan a `failed` y la partida avanza a REVIEW/FINISHED.
  */
 export interface StoryJob {
   gameId: string;
@@ -28,4 +30,17 @@ export interface StoryJob {
 /** Id determinístico: deduplica reprogramaciones y permite borrar la tarea. BullMQ no admite ':'. */
 export function storyJobId(job: StoryJob): string {
   return `${job.gameId}__${job.seq}__${job.kind}__${job.dueAt}`;
+}
+
+/** Cola de la media de las viñetas (Fase 4b): una tarea por viñeta. */
+export const STORY_MEDIA_QUEUE = 'story-media';
+
+/**
+ * Viñetas que se generan a la vez en cada instancia. Polly tarda ~1 s y Nova
+ * Canvas unos segundos: con 2 la primera viñeta sale rápido sin saturar las cuotas.
+ */
+export const STORY_MEDIA_CONCURRENCY = 2;
+
+export function storyMediaJobId(gameId: string, order: number): string {
+  return `${gameId}__media__${order}`;
 }

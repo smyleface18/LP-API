@@ -72,6 +72,24 @@ export class EnvsService {
     return this.config.get<string>('BEDROCK_REVIEW_MODEL_ID') || undefined;
   }
 
+  /** Región de Polly para narrar las viñetas. Por defecto, la de AWS_REGION. */
+  get pollyRegion(): string | undefined {
+    return this.config.get<string>('POLLY_REGION') || this.config.get<string>('AWS_REGION');
+  }
+
+  /** Voz neural de Polly para la narración (inglés). Por defecto, Joanna. */
+  get pollyVoiceId(): string {
+    return this.config.get<string>('POLLY_VOICE_ID') || 'Joanna';
+  }
+
+  /**
+   * Model ID de Amazon Nova Canvas (Bedrock) para dibujar las viñetas. Sin
+   * definir, las historietas se generan sin imágenes (solo con audio).
+   */
+  get bedrockImageModelId(): string | undefined {
+    return this.config.get<string>('BEDROCK_IMAGE_MODEL_ID') || undefined;
+  }
+
   // Helpers para evitar valores undefined
   private getString(key: string): string {
     const value = this.config.get<string>(key);

@@ -190,10 +190,10 @@ describe('StoryGameService', () => {
       await expectStoryError(service.startStory(gameId, 'bob'), 'NOT_HOST');
     });
 
-    it('needs at least 2 connected players', async () => {
-      const gameId = await lobbyWith('alice', 'bob');
-      await service.disconnect(gameId, 'bob');
-      await expectStoryError(service.startStory(gameId, 'alice'), 'NOT_ENOUGH_PLAYERS');
+    it('lets a single player start a solo story', async () => {
+      const gameId = await lobbyWith('alice');
+      await service.startStory(gameId, 'alice');
+      expect((await gameOf(gameId)).status).toBe(StoryStatus.PLAYING);
     });
 
     it('needs at least one panel per player', async () => {

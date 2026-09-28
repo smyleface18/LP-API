@@ -255,7 +255,15 @@ function serializeGame(game: StoryGame): HashOps {
     ],
     del: [],
   };
-  for (const field of ['currentPanel', 'turnEndsAt', 'turnCloseAt', 'abandonAt'] as const) {
+  if (game.storyId === null) ops.del.push('storyId');
+  else ops.set.push(['storyId', game.storyId]);
+  for (const field of [
+    'currentPanel',
+    'turnEndsAt',
+    'turnCloseAt',
+    'abandonAt',
+    'mediaDeadlineAt',
+  ] as const) {
     const value = game[field];
     if (value === null) ops.del.push(field);
     else ops.set.push([field, String(value)]);
@@ -276,5 +284,7 @@ function deserializeGame(gameId: string, raw: Record<string, string>): StoryGame
     abandonAt: raw.abandonAt === undefined ? null : Number(raw.abandonAt),
     abandonSeq: Number(raw.abandonSeq ?? 0),
     createdAt: Number(raw.createdAt),
+    storyId: raw.storyId ?? null,
+    mediaDeadlineAt: raw.mediaDeadlineAt === undefined ? null : Number(raw.mediaDeadlineAt),
   };
 }

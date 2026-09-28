@@ -14,7 +14,7 @@ import { ApiResponse } from '@/common/src/api/api.type';
 import { WsHttpExceptionFilter } from '@/common/src/api/ws-exception.filter';
 import { WsAuthService } from '@/common/src/ws-auth/ws-auth.service';
 import { StoryGameService } from './story-game.service';
-import { StoryAvatars } from './story-avatars.service';
+import { StoryUrlSigner } from './story-url-signer.service';
 import { StoryError } from './domain/story-game.errors';
 import { StorySnapshot } from './domain/story-game.types';
 import {
@@ -30,12 +30,15 @@ import {
   AuthorStatusEvent,
   DraftReviewedEvent,
   PanelConfirmedEvent,
+  PanelMediaReadyEvent,
   PanelReactionEvent,
   ReviewReadyEvent,
   STORY_EVENTS,
+  StoryProcessingEvent,
   StoryStateChangedEvent,
   TurnStartedEvent,
 } from './domain/story-game.events';
+import { closedPanels } from './domain/story-turns';
 import { JoinStoryGameDto } from './dto/join-story-game.dto';
 import { UpdateConfigDto } from './dto/update-config.dto';
 import { KickPlayerDto } from './dto/kick-player.dto';
@@ -79,7 +82,7 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
   constructor(
     private readonly storyGameService: StoryGameService,
     private readonly wsAuthService: WsAuthService,
-    private readonly avatars: StoryAvatars,
+    private readonly urls: StoryUrlSigner,
   ) {}
 
   async handleConnection(@ConnectedSocket() client: StorySocket) {
@@ -304,7 +307,7 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
   }
 
   private avatarsOf(snapshot: StorySnapshot) {
-    return this.avatars.urlsFor(snapshot.game.players);
+    return this.urls.avatarsFor(snapshot.game.players);
   }
 
   /**
@@ -378,8 +381,38 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
   @OnEvent(STORY_EVENTS.reviewReady)
   onReviewReady({ gameId, snapshot }: ReviewReadyEvent) {
     return this.emitFromEvent(async () => {
-      const manifest = toReviewManifest(snapshot, await this.avatarsOf(snapshot));
-      this.server.to(gameId).emit('storyReviewReady', manifest);
+      const [avatars, media] = await Promise.all([
+        this.avatarsOf(snapshot),
+        this.urls.mediaFor(closedPanels(snapshot)),
+      ]);
+      this.server.to(gameId).emit('storyReviewReady', toReviewManifest(snapshot, avatars, media));
+    });
+  }
+
+  /** Avance de la generación de media mientras la partida está en PROCESSING. */
+  @OnEvent(STORY_EVENTS.processing)
+  onProcessing(progress: StoryProcessingEvent) {
+    return this.emitFromEvent(() =>
+      this.server.to(progress.gameId).emit('storyProcessing', progress),
+    );
+  }
+
+  /**
+   * Una viñeta terminó su media: las URLs se firman acá. Lleva `gameId` porque
+   * llega en REVIEW, cuando la partida ya no es la activa de los jugadores.
+   */
+  @OnEvent(STORY_EVENTS.panelMediaReady)
+  onPanelMediaReady({ gameId, order, media }: PanelMediaReadyEvent) {
+    return this.emitFromEvent(async () => {
+      const { audioUrl, imageUrl } = await this.urls.signMedia(media);
+      this.server.to(gameId).emit('panelMediaReady', {
+        gameId,
+        order,
+        mediaStatus: media.status,
+        audioUrl,
+        imageUrl,
+        speechMarks: media.speechMarks,
+      });
     });
   }
 

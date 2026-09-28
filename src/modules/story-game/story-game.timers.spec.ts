@@ -1,5 +1,6 @@
+import { Injectable } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
-import { EventEmitterModule } from '@nestjs/event-emitter';
+import { EventEmitterModule, OnEvent } from '@nestjs/event-emitter';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Job } from 'bullmq';
 import { Server } from 'socket.io';
@@ -12,11 +13,12 @@ import {
 } from '@/modules/language-review/language-reviewer';
 import { StoryGameGateway } from './story-game.gateway';
 import { StoryGameService } from './story-game.service';
-import { StoryAvatars } from './story-avatars.service';
+import { StoryUrlSigner } from './story-url-signer.service';
 import { StoryStateRepository } from './story-state.repository';
 import { StoryTimeoutProcessor } from './queue/story-timeout.processor';
 import { StoryJob } from './queue/type';
 import { StoryStatus } from './domain/story-game.types';
+import { MediaRequestedEvent, STORY_EVENTS } from './domain/story-game.events';
 import { InMemoryStoryStore } from '../../../test/story-game/story-harness';
 
 /**
@@ -30,6 +32,27 @@ import { InMemoryStoryStore } from '../../../test/story-game/story-harness';
  * el mensaje en Redis y cada instancia lo entrega a sus sockets de esa sala.
  * Por eso no importa en qué instancia corra la tarea ni dónde esté cada jugador.
  */
+/**
+ * Hace lo que harían StoryMediaQueue y StoryMediaProcessor (sin BullMQ ni
+ * AWS): responde `mediaRequested` con audio listo para cada viñeta.
+ */
+@Injectable()
+class InstantMediaWorker {
+  constructor(private readonly service: StoryGameService) {}
+
+  @OnEvent(STORY_EVENTS.mediaRequested, { async: true, promisify: true })
+  async onMediaRequested({ gameId, panels }: MediaRequestedEvent) {
+    for (const { order } of panels) {
+      await this.service.onPanelMedia(gameId, order, {
+        status: 'ready',
+        audioKey: `story/s/panel-${order}.mp3`,
+        imageKey: null,
+        speechMarks: [],
+      });
+    }
+  }
+}
+
 describe('Timer-driven events reach the room', () => {
   const T0 = 1_800_000_000_000;
   let moduleRef: TestingModule;
@@ -45,10 +68,18 @@ describe('Timer-driven events reach the room', () => {
         StoryGameGateway,
         StoryGameService,
         StoryTimeoutProcessor,
+        InstantMediaWorker,
         { provide: StoryStateRepository, useValue: new InMemoryStoryStore() },
         { provide: LanguageReviewer, useClass: NoErrorsLanguageReviewer },
         { provide: WsAuthService, useValue: {} },
-        { provide: StoryAvatars, useValue: { urlsFor: () => Promise.resolve({}) } },
+        {
+          provide: StoryUrlSigner,
+          useValue: {
+            avatarsFor: () => Promise.resolve({}),
+            mediaFor: () => Promise.resolve({}),
+            signMedia: () => Promise.resolve({ audioUrl: null, imageUrl: null }),
+          },
+        },
         { provide: UniqueNamesAdapter, useValue: { NamesGenerator: () => 'g1' } },
         {
           provide: getRepositoryToken(User),
@@ -139,7 +170,10 @@ describe('Timer-driven events reach the room', () => {
     const ready = emitted.filter(([, event]) => event === 'storyReviewReady');
     expect(ready).toHaveLength(1);
     expect(ready[0][0]).toBe('g1');
-    expect(ready[0][2]).toMatchObject({ storyId: 'g1' });
+    expect(ready[0][2]).toMatchObject({
+      gameId: 'g1',
+      storyId: (await service.getSnapshot('g1')).game.storyId,
+    });
     expect((ready[0][2] as { panels: unknown[] }).panels).toHaveLength(4);
   });
 });
