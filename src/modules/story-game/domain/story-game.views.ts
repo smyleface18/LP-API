@@ -1,5 +1,24 @@
 import { CharacterCorrection, Correction } from '@/modules/language-review/language-review.types';
-import { MAX_REVIEW_ATTEMPTS } from '../story-game.config';
+import {
+  CHARACTER_LIMITS,
+  MAX_CHARACTERS_PER_PANEL,
+  MAX_CHARACTERS_PER_STORY,
+  MAX_CHARS_PER_PANEL,
+  MAX_CHARS_PER_SCENE,
+  MAX_DRAFTS_PER_TURN,
+  MAX_NEW_CHARACTERS_PER_PANEL,
+  MAX_REVIEW_ATTEMPTS,
+  MIN_WORDS_PER_PANEL,
+  STORY_DEFAULT_CONFIG,
+  STORY_LANGUAGES,
+  STORY_LEVELS,
+  STORY_MAX_PLAYERS,
+  STORY_MIN_PLAYERS,
+  STORY_PANELS_MAX,
+  STORY_PANELS_MIN,
+  STORY_REACTIONS,
+  STORY_TURN_DURATIONS_SEC,
+} from '../story-game.config';
 import { StoryPanelSummary } from './story-game.events';
 import { authorStatusOf, castOf, storySoFar } from './story-turns';
 import { ScoreboardEntry, scoreboardOf } from './story-review';
@@ -13,6 +32,9 @@ import {
   StoryStatus,
 } from './story-game.types';
 
+/** userId → URL firmada del avatar (`StoryAvatars.urlsFor`). Sin entrada = sin avatar. */
+export type AvatarUrls = Record<string, string>;
+
 /** Payload de `lobbyUpdated`. */
 export interface LobbyView {
   gameId: string;
@@ -22,12 +44,13 @@ export interface LobbyView {
   players: {
     userId: string;
     username: string;
+    avatarUrl: string | null;
     connected: boolean;
     left: boolean;
   }[];
 }
 
-export function toLobbyView({ game }: StorySnapshot): LobbyView {
+export function toLobbyView({ game }: StorySnapshot, avatars: AvatarUrls = {}): LobbyView {
   return {
     gameId: game.gameId,
     status: game.status,
@@ -36,6 +59,7 @@ export function toLobbyView({ game }: StorySnapshot): LobbyView {
     players: game.players.map(({ userId, username, connected, left }) => ({
       userId,
       username,
+      avatarUrl: avatars[userId] ?? null,
       connected,
       left,
     })),
@@ -104,6 +128,7 @@ export function toOwnDraftView(draft: PanelDraft): OwnDraftView {
 export function toGameStateView(
   snapshot: StorySnapshot,
   userId: string,
+  avatars: AvatarUrls = {},
   now = Date.now(),
 ): GameStateView {
   const { game } = snapshot;
@@ -112,7 +137,7 @@ export function toGameStateView(
     game.status === StoryStatus.PLAYING && panel?.status === 'open' ? panel : undefined;
 
   return {
-    lobby: toLobbyView(snapshot),
+    lobby: toLobbyView(snapshot, avatars),
     turn:
       openPanel && game.turnEndsAt !== null
         ? {
@@ -124,7 +149,7 @@ export function toGameStateView(
         : null,
     storySoFar: storySoFar(snapshot),
     cast: castOf(snapshot),
-    scoreboard: scoreboardOf(game),
+    scoreboard: scoreboardOf(game, avatars),
     myTurn:
       openPanel && openPanel.authorId === userId
         ? {
@@ -136,3 +161,57 @@ export function toGameStateView(
         : null,
   };
 }
+
+/**
+ * Respuesta de `getStoryRules`: rangos de la configuración, límites del
+ * borrador y reacciones permitidas, para que el cliente no los repita.
+ */
+export interface StoryRulesView {
+  players: { min: number; max: number };
+  config: {
+    panelsCount: { min: number; max: number };
+    turnDurationsSec: readonly number[];
+    levels: readonly string[];
+    languages: readonly string[];
+    defaults: StoryConfig;
+  };
+  draft: {
+    minWords: number;
+    maxChars: number;
+    maxSceneChars: number;
+    maxReviewAttempts: number;
+    maxDraftsPerTurn: number;
+  };
+  characters: {
+    maxPerStory: number;
+    maxPerPanel: number;
+    maxNewPerPanel: number;
+    limits: { name: number; kind: number; description: number };
+  };
+  reactions: readonly string[];
+}
+
+export const STORY_RULES: StoryRulesView = {
+  players: { min: STORY_MIN_PLAYERS, max: STORY_MAX_PLAYERS },
+  config: {
+    panelsCount: { min: STORY_PANELS_MIN, max: STORY_PANELS_MAX },
+    turnDurationsSec: STORY_TURN_DURATIONS_SEC,
+    levels: STORY_LEVELS,
+    languages: STORY_LANGUAGES,
+    defaults: STORY_DEFAULT_CONFIG,
+  },
+  draft: {
+    minWords: MIN_WORDS_PER_PANEL,
+    maxChars: MAX_CHARS_PER_PANEL,
+    maxSceneChars: MAX_CHARS_PER_SCENE,
+    maxReviewAttempts: MAX_REVIEW_ATTEMPTS,
+    maxDraftsPerTurn: MAX_DRAFTS_PER_TURN,
+  },
+  characters: {
+    maxPerStory: MAX_CHARACTERS_PER_STORY,
+    maxPerPanel: MAX_CHARACTERS_PER_PANEL,
+    maxNewPerPanel: MAX_NEW_CHARACTERS_PER_PANEL,
+    limits: CHARACTER_LIMITS,
+  },
+  reactions: STORY_REACTIONS,
+};

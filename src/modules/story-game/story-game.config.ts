@@ -42,6 +42,14 @@ export const IDLE_ABANDON_DELAY_MS = 60_000;
  */
 export const FINISHED_STORY_TTL_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * URLs firmadas de los avatares: duran 2 h y se reutilizan mientras les quede
+ * al menos 30 min, para que el cliente no recargue la imagen en cada
+ * `lobbyUpdated` y la URL que recibe siga valiendo un buen rato.
+ */
+export const AVATAR_URL_TTL_SEC = 2 * 60 * 60;
+export const AVATAR_URL_MIN_REMAINING_MS = 30 * 60 * 1000;
+
 /** Revisiones de IA que puede usar un jugador en su viñeta. */
 export const MAX_REVIEW_ATTEMPTS = 2;
 export const MAX_CHARS_PER_PANEL = 320;

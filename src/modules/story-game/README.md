@@ -13,6 +13,7 @@ Estado actual: **Fase 4a** (lobby, turnos y personajes, revisión de inglés con
 | `domain/story-turns.ts`     | Reglas de los turnos como funciones puras: autor, apertura, cierre, validación.       |
 | `domain/story-review.ts`    | Manifiesto del review y marcador (`scoreboard`/`ranking`), como funciones puras.      |
 | `story-state.repository.ts` | Lectura/escritura en Redis (hashes, scripts Lua con guarda, referencia usuario → partida). |
+| `story-avatars.service.ts`  | Firma las URLs de los avatares de los jugadores al enviar las vistas (con caché).     |
 | `story-game.config.ts`      | Todos los números del modo (jugadores, rangos, límites de texto y personajes).        |
 | `domain/`                   | Tipos, errores (`StoryError` con `code`), eventos internos y vistas para el cliente.  |
 | `dto/`                      | DTOs de los eventos con `class-validator`.                                            |
@@ -37,7 +38,7 @@ Solo el servidor cambia el estado. Un evento que no corresponde al estado actual
 TTL: `MATCH_TTL` (se renueva en cada escritura). Una partida FINISHED usa `FINISHED_STORY_TTL_MS` (24 h), también en las escrituras posteriores (reacciones), para poder servir su manifiesto hasta que exista la persistencia (Fase 4c). Todas las claves de una partida comparten el hash tag `{gameId}`.
 
 ```text
-story:{gameId}              hash: status, hostId, config (json), players (json, en orden de entrada),
+story:{gameId}              hash: status, hostId, config (json), players (json, en orden de entrada, con avatarKey),
                             currentPanel, turnEndsAt, turnCloseAt, abandonAt, abandonSeq, createdAt
 story:{gameId}:characters   hash: characterId → { id, name, kind, description, createdBy, introducedInPanel }
 story:{gameId}:panels       hash: order → viñeta (PanelState, json)
@@ -53,6 +54,16 @@ Cada cambio pasa por `StoryGameService.mutate`: toma el lock de la partida, lee,
 La guarda es lo que hace que un turno se cierre **una sola vez**: confirmar y el timeout usan el mismo cierre con guarda, así que aunque llegaran juntos sin el lock, Redis rechaza el segundo.
 
 El elenco solo crece: los personajes son inmutables una vez agregados, porque otras viñetas dependen de ellos. Su id es `ch-{viñeta}-{índice}`.
+
+## Avatares
+
+Cada jugador guarda en Redis la **key** de S3 de su avatar (`avatarKey`, tomada del `User` al crear, unirse o reconectarse con `joinStoryGame`), nunca la URL: las URLs firmadas vencen y una partida terminada vive 24 h. `StoryAvatars.urlsFor(players)` firma las keys al enviar cada vista y devuelve `userId → URL`; las vistas llevan `avatarUrl` (`null` si no tiene avatar o no se pudo firmar, lo que nunca frena la partida).
+
+Cada URL dura `AVATAR_URL_TTL_SEC` (2 h) y se reutiliza mientras le quede al menos `AVATAR_URL_MIN_REMAINING_MS` (30 min): así el cliente no recarga la imagen en cada `lobbyUpdated`. La caché es por instancia. En el review, el cliente puede volver a pedir `getReviewManifest` para URLs nuevas.
+
+Llevan `avatarUrl`: los jugadores de `lobbyUpdated` (y de `gameState.lobby`), `gameState.scoreboard` y el `ranking` del manifiesto.
+
+Como firmar es async, el gateway manda todas las emisiones a salas por una cola (`emitInOrder`): los eventos de una instancia salen en el orden en que el servicio los publicó (ej. `lobbyUpdated` con PLAYING antes de `turnStarted`). Por lo mismo, `storyReviewReady` lleva el estado en el evento interno y el gateway arma el manifiesto.
 
 ## Tareas diferidas (cola `story-turn-timeout`)
 
@@ -141,6 +152,7 @@ Como la partida ya no es la activa del usuario, `getReviewManifest` y `reactToPa
   ranking: {                  // por averageScore desc; desempata totalScore y el orden de entrada;
     userId: string;           // los que no escribieron ninguna viñeta van al final
     name: string;
+    avatarUrl: string | null; // firmada (ver Avatares)
     panelsWritten: number;
     averageScore: number;     // totalScore / panelsWritten, un decimal; 0 sin viñetas
     totalScore: number;
@@ -186,7 +198,8 @@ Los errores van por el ack si el cliente lo envió; si no, por `storyError`: `{ 
 | `getGameState`      | cliente → servidor  | Ack: `GameStateView` (estado completo para ese jugador).                                 |
 | `getReviewManifest` | cliente → servidor  | `{ gameId }`. REVIEW o FINISHED, participantes. Ack: manifiesto.                          |
 | `leaveGame`         | cliente → servidor  | Sin payload.                                                                             |
-| `lobbyUpdated`      | servidor → sala     | `{ gameId, status, hostId, config, players: [{ userId, username, connected, left }] }`   |
+| `getStoryRules`     | cliente → servidor  | Sin payload. Ack: `StoryRulesView` (ver Reglas para el cliente).                         |
+| `lobbyUpdated`      | servidor → sala     | `{ gameId, status, hostId, config, players: [{ userId, username, avatarUrl, connected, left }] }` |
 | `turnStarted`       | servidor → sala     | `{ panelOrder, authorId, endsAt, storySoFar, cast }`                                     |
 | `panelReviewResult` | servidor → autor    | `{ panelOrder, flagged, reviewAvailable, corrections, characterCorrections, attemptsLeft, message? }`. Nunca el texto corregido. |
 | `authorStatus`      | servidor → sala     | `{ order, status: 'writing' \| 'reviewing' \| 'correcting' }`                           |
@@ -202,6 +215,31 @@ Los errores van por el ack si el cliente lo envió; si no, por `storyError`: `{ 
 `GameStateView`: `{ lobby, turn: { panelOrder, authorId, endsAt, authorStatus } | null, storySoFar, cast, scoreboard, myTurn }`. `scoreboard` tiene el mismo formato y orden que el `ranking` del manifiesto, para reconstruir el marcador al reconectarse. Cada viñeta de `storySoFar` es `{ order, authorId, finalText, scene, characterIds, reactions }`. `myTurn` es `null` salvo para el autor del turno en curso: `{ attempts, attemptsLeft, reviewing, drafts }`, con sus borradores y correcciones, sin el texto corregido.
 
 Códigos de error: `VALIDATION_ERROR`, `USER_NOT_FOUND`, `GAME_NOT_FOUND`, `NOT_IN_GAME`, `ALREADY_IN_GAME`, `NOT_A_PLAYER`, `NOT_HOST`, `INVALID_STATE`, `GAME_FULL`, `NOT_ENOUGH_PLAYERS`, `NOT_ENOUGH_PANELS`, `CANNOT_KICK_SELF`, `KICKED`, `NOT_YOUR_TURN`, `TURN_CLOSED`, `TURN_EXPIRED`, `REVIEW_IN_PROGRESS`, `NO_ATTEMPTS_LEFT`, `DRAFT_LIMIT_REACHED`, `NO_DRAFT`, `INVALID_DRAFT`, `UNKNOWN_CHARACTER`, `TOO_MANY_CHARACTERS`, `DUPLICATE_CHARACTER_NAME`, `PANEL_NOT_CONFIRMED`.
+
+## Reglas para el cliente (`getStoryRules`)
+
+El cliente pide las reglas una vez (no dependen de la partida ni del usuario) y arma con ellas los formularios, en lugar de copiar los números. Salen de `story-game.config.ts` (`STORY_RULES` en `domain/story-game.views.ts`):
+
+```ts
+{
+  players: { min: 2, max: 6 },
+  config: {
+    panelsCount: { min: 4, max: 10 },
+    turnDurationsSec: [60, 90, 120, 180],
+    levels: ['A1', 'A2', 'B1', 'B2'],
+    languages: ['en-US'],
+    defaults: { panelsCount: 6, turnDurationSec: 90, level: 'A2', language: 'en-US', shareDrafts: true },
+  },
+  draft: { minWords: 8, maxChars: 320, maxSceneChars: 200, maxReviewAttempts: 2, maxDraftsPerTurn: 5 },
+  characters: {
+    maxPerStory: 6, maxPerPanel: 3, maxNewPerPanel: 2,
+    limits: { name: 30, kind: 30, description: 100 },
+  },
+  reactions: ['👏', '😂', '😮', '❤️', '🔥'],
+}
+```
+
+El servidor sigue validando todo; las reglas son para que la interfaz no deje armar algo que se va a rechazar.
 
 ## Reglas del lobby y la conexión
 
@@ -224,5 +262,6 @@ Códigos de error: `VALIDATION_ERROR`, `USER_NOT_FOUND`, `GAME_NOT_FOUND`, `NOT_
 - `test/story-game/story-harness.ts`: Redis en memoria (emula el script Lua con guarda), reloj controlado y dependencias falsas, compartido por los dos specs anteriores.
 - `story-state.repository.spec.ts`: formato de las claves y de los scripts, con el cliente Redis mockeado. Incluye un bloque contra un Redis real (scripts Lua y guarda) que se salta si no hay `REDIS_TEST_URL`.
 - `queue/story-timeout.queue.spec.ts`: id fijo de la tarea, delay y cancelación.
-- `story-game.gateway.spec.ts`: salas personales, partida leída de Redis, `KICKED`, resultado de revisión solo al autor, borradores a la sala menos el autor, reacciones y eventos de turno.
+- `story-avatars.service.spec.ts`: firma de las keys, reutilización de la URL según el tiempo que le queda y avatares que no se pueden firmar.
+- `story-game.gateway.spec.ts`: salas personales, partida leída de Redis, `KICKED`, resultado de revisión solo al autor, borradores a la sala menos el autor, reacciones, eventos de turno, avatares firmados (nunca la key), orden de las emisiones con una firma lenta y `getStoryRules`.
 - `dto/story-dtos.spec.ts`: rangos de configuración y payloads a través del pipe del gateway.

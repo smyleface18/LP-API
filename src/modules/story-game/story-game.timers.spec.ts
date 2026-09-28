@@ -12,6 +12,7 @@ import {
 } from '@/modules/language-review/language-reviewer';
 import { StoryGameGateway } from './story-game.gateway';
 import { StoryGameService } from './story-game.service';
+import { StoryAvatars } from './story-avatars.service';
 import { StoryStateRepository } from './story-state.repository';
 import { StoryTimeoutProcessor } from './queue/story-timeout.processor';
 import { StoryJob } from './queue/type';
@@ -47,6 +48,7 @@ describe('Timer-driven events reach the room', () => {
         { provide: StoryStateRepository, useValue: new InMemoryStoryStore() },
         { provide: LanguageReviewer, useClass: NoErrorsLanguageReviewer },
         { provide: WsAuthService, useValue: {} },
+        { provide: StoryAvatars, useValue: { urlsFor: () => Promise.resolve({}) } },
         { provide: UniqueNamesAdapter, useValue: { NamesGenerator: () => 'g1' } },
         {
           provide: getRepositoryToken(User),
@@ -72,6 +74,9 @@ describe('Timer-driven events reach the room', () => {
     processor = moduleRef.get(StoryTimeoutProcessor);
   });
 
+  /** El gateway encola las emisiones (ver `emitInOrder`): deja que salgan las pendientes. */
+  const flushEmissions = () => new Promise((resolve) => setImmediate(resolve));
+
   afterEach(async () => {
     await moduleRef.close();
     jest.restoreAllMocks();
@@ -81,6 +86,7 @@ describe('Timer-driven events reach the room', () => {
     await service.createGame('alice');
     await service.joinGame('g1', 'bob');
     await service.startStory('g1', 'alice');
+    await flushEmissions();
     emitted = [];
 
     const dueAt = T0 + 90_000;
@@ -88,6 +94,7 @@ describe('Timer-driven events reach the room', () => {
     await processor.process({
       data: { gameId: 'g1', kind: 'close-turn', seq: 0, dueAt },
     } as Job<StoryJob>);
+    await flushEmissions();
 
     expect(emitted.map(([room, event]) => [room, event])).toEqual([
       ['g1', 'panelConfirmed'],

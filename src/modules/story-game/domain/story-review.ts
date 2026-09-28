@@ -1,12 +1,14 @@
 import { Correction } from '@/modules/language-review/language-review.types';
 import { StoryReaction } from '../story-game.config';
 import { castOf, closedPanels } from './story-turns';
+import type { AvatarUrls } from './story-game.views';
 import { PanelScore, StoryCharacter, StoryGame, StorySnapshot } from './story-game.types';
 
 /** Puntaje acumulado de un jugador: `scoreboard` de gameState y `ranking` del manifiesto. */
 export interface ScoreboardEntry {
   userId: string;
   name: string;
+  avatarUrl: string | null;
   panelsWritten: number;
   totalScore: number;
   /** totalScore / panelsWritten, con un decimal; 0 si no escribió ninguna. */
@@ -61,11 +63,12 @@ const oneDecimal = (value: number) => Math.round(value * 10) / 10;
  * el total y después el orden de entrada). Los que no escribieron ninguna
  * viñeta van al final.
  */
-export function scoreboardOf(game: StoryGame): ScoreboardEntry[] {
+export function scoreboardOf(game: StoryGame, avatars: AvatarUrls = {}): ScoreboardEntry[] {
   return game.players
     .map((player) => ({
       userId: player.userId,
       name: player.username,
+      avatarUrl: avatars[player.userId] ?? null,
       panelsWritten: player.panelsWritten,
       totalScore: player.totalScore,
       averageScore:
@@ -80,7 +83,10 @@ export function scoreboardOf(game: StoryGame): ScoreboardEntry[] {
 }
 
 /** Manifiesto a partir del estado en Redis. Sin media todavía: todo `none`. */
-export function toReviewManifest(snapshot: StorySnapshot): ReviewManifest {
+export function toReviewManifest(
+  snapshot: StorySnapshot,
+  avatars: AvatarUrls = {},
+): ReviewManifest {
   const { game } = snapshot;
   const nameOf = (userId: string) =>
     game.players.find((player) => player.userId === userId)?.username ?? '';
@@ -89,7 +95,7 @@ export function toReviewManifest(snapshot: StorySnapshot): ReviewManifest {
     storyId: game.gameId,
     gameId: game.gameId,
     characters: castOf(snapshot),
-    ranking: scoreboardOf(game),
+    ranking: scoreboardOf(game, avatars),
     panels: closedPanels(snapshot).map((panel) => ({
       order: panel.order,
       author: { id: panel.authorId, name: nameOf(panel.authorId) },

@@ -9,6 +9,7 @@ import {
   LanguageReviewInput,
 } from '@/modules/language-review/language-review.types';
 import { StoryGameService } from '@/modules/story-game/story-game.service';
+import { StoryAvatars } from '@/modules/story-game/story-avatars.service';
 import {
   PanelGuardError,
   StoryChanges,
@@ -130,12 +131,15 @@ export function createStoryHarness(start = 1_800_000_000_000) {
   } as unknown as Repository<User>;
   const uniqueNames = { NamesGenerator: () => `game-${++nextName}` } as UniqueNamesAdapter;
 
+  const avatars = { urlsFor: jest.fn().mockResolvedValue({}) };
+
   const service = new StoryGameService(
     store as unknown as StoryStateRepository,
     users,
     uniqueNames,
     events as unknown as EventEmitter2,
     reviewer as unknown as LanguageReviewer,
+    avatars as unknown as StoryAvatars,
   );
 
   /** Partida con `ids` en orden de entrada; el primero es el anfitrión. */
@@ -173,6 +177,8 @@ export function createStoryHarness(start = 1_800_000_000_000) {
     store,
     events,
     reviewer,
+    users,
+    avatars,
     service,
     lobbyWith,
     playingWith,

@@ -12,6 +12,7 @@ import {
 } from '@/modules/language-review/language-review.types';
 import { PanelGuardError, StoryChanges, StoryStateRepository } from './story-state.repository';
 import { StoryError } from './domain/story-game.errors';
+import { StoryAvatars } from './story-avatars.service';
 import { ProcessingStartedEvent, STORY_EVENTS, StoryOutboxItem } from './domain/story-game.events';
 import { ReviewManifest, toReviewManifest } from './domain/story-review';
 import {
@@ -75,6 +76,7 @@ export class StoryGameService {
     private readonly uniqueNames: UniqueNamesAdapter,
     private readonly eventEmitter: EventEmitter2,
     private readonly reviewer: LanguageReviewer,
+    private readonly avatars: StoryAvatars,
   ) {}
 
   async createGame(userId: string): Promise<StorySnapshot> {
@@ -92,6 +94,7 @@ export class StoryGameService {
           {
             userId: user.id,
             username: user.username,
+            avatarKey: user.avatar?.key ?? null,
             connected: true,
             left: false,
             joinedAt: now,
@@ -134,6 +137,7 @@ export class StoryGameService {
       const existing = game.players.find((player) => player.userId === userId);
       if (existing && !existing.left) {
         existing.connected = true;
+        existing.avatarKey = user.avatar?.key ?? null;
         this.onPlayerConnected(game);
         return { game };
       }
@@ -146,6 +150,7 @@ export class StoryGameService {
       game.players.push({
         userId: user.id,
         username: user.username,
+        avatarKey: user.avatar?.key ?? null,
         connected: true,
         left: false,
         joinedAt: Date.now(),
@@ -470,7 +475,7 @@ export class StoryGameService {
       outbox.push({ event: STORY_EVENTS.stateChanged, payload: { snapshot } });
       outbox.push({
         event: STORY_EVENTS.reviewReady,
-        payload: { gameId, manifest: toReviewManifest(snapshot) },
+        payload: { gameId, snapshot },
       });
       return { game };
     });
@@ -505,7 +510,7 @@ export class StoryGameService {
     if (game.status !== StoryStatus.REVIEW && game.status !== StoryStatus.FINISHED) {
       throw StoryError.invalidState('get the review', game.status);
     }
-    return toReviewManifest(snapshot);
+    return toReviewManifest(snapshot, await this.avatars.urlsFor(game.players));
   }
 
   /** Estado completo de la partida tal como lo ve este jugador (reconexión). */
@@ -514,7 +519,7 @@ export class StoryGameService {
     if (!gameId) throw new StoryError('NOT_IN_GAME', 'Join a story game first');
     const snapshot = await this.getSnapshot(gameId);
     this.assertActivePlayer(snapshot.game, userId);
-    return toGameStateView(snapshot, userId);
+    return toGameStateView(snapshot, userId, await this.avatars.urlsFor(snapshot.game.players));
   }
 
   /**
@@ -935,7 +940,7 @@ export class StoryGameService {
   }
 
   private async findUser(userId: string): Promise<User> {
-    const user = await this.users.findOne({ where: { id: userId } });
+    const user = await this.users.findOne({ where: { id: userId }, relations: ['avatar'] });
     if (!user) throw new StoryError('USER_NOT_FOUND', 'User not found', HttpStatus.NOT_FOUND);
     return user;
   }

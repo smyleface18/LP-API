@@ -7,6 +7,7 @@ import {
   StoryStateChangedEvent,
 } from './domain/story-game.events';
 import { DraftInput, StoryStatus } from './domain/story-game.types';
+import { toReviewManifest } from './domain/story-review';
 import { FINISHED_STORY_TTL_MS, OUT_OF_TIME_TEXT } from './story-game.config';
 import {
   createStoryHarness,
@@ -44,7 +45,11 @@ describe('StoryGameService — end of the story (phase 4a)', () => {
 
   afterEach(() => jest.restoreAllMocks());
 
-  const reviewReady = () => h.emitted<ReviewReadyEvent>(STORY_EVENTS.reviewReady);
+  /** Manifiesto tal como lo arma el gateway con cada `reviewReady` (sin avatares). */
+  const reviewReady = () =>
+    h
+      .emitted<ReviewReadyEvent>(STORY_EVENTS.reviewReady)
+      .map(({ gameId, snapshot }) => ({ gameId, manifest: toReviewManifest(snapshot) }));
   const statuses = () =>
     h
       .emitted<StoryStateChangedEvent>(STORY_EVENTS.stateChanged)
@@ -164,14 +169,59 @@ describe('StoryGameService — end of the story (phase 4a)', () => {
     });
   });
 
+  it('keeps the avatar key of each player and signs it for the manifest', async () => {
+    (h.users.findOne as jest.Mock).mockImplementation(
+      ({ where: { id } }: { where: { id: string } }) =>
+        Promise.resolve({ id, username: `name-${id}`, avatar: { key: `avatar/${id}.png` } }),
+    );
+    h.avatars.urlsFor.mockResolvedValue({ bob: 'https://signed/bob' });
+    const gameId = await playScoredStory();
+    await runProcessing();
+
+    const { game } = await h.snapshotOf(gameId);
+    expect(game.players.map((player) => player.avatarKey)).toEqual([
+      'avatar/alice.png',
+      'avatar/bob.png',
+      'avatar/carol.png',
+    ]);
+    const { ranking } = await service.getReviewManifest(gameId, 'alice');
+    expect(h.avatars.urlsFor).toHaveBeenLastCalledWith(game.players);
+    expect(ranking.map((entry) => [entry.userId, entry.avatarUrl])).toEqual([
+      ['bob', 'https://signed/bob'],
+      ['alice', null],
+      ['carol', null],
+    ]);
+  });
+
   it('ranks the players by their average score per panel', async () => {
     const gameId = await playScoredStory();
     await runProcessing();
 
     expect(reviewReady()[0].manifest.ranking).toEqual([
-      { userId: 'bob', name: 'name-bob', panelsWritten: 1, totalScore: 150, averageScore: 150 },
-      { userId: 'alice', name: 'name-alice', panelsWritten: 2, totalScore: 150, averageScore: 75 },
-      { userId: 'carol', name: 'name-carol', panelsWritten: 1, totalScore: 70, averageScore: 70 },
+      {
+        userId: 'bob',
+        name: 'name-bob',
+        avatarUrl: null,
+        panelsWritten: 1,
+        totalScore: 150,
+        averageScore: 150,
+      },
+      {
+        userId: 'alice',
+        name: 'name-alice',
+        avatarUrl: null,
+        panelsWritten: 2,
+        totalScore: 150,
+        averageScore: 75,
+      },
+      {
+        userId: 'carol',
+        name: 'name-carol',
+        avatarUrl: null,
+        panelsWritten: 1,
+        totalScore: 70,
+        averageScore: 70,
+      },
     ]);
     expect((await service.getReviewManifest(gameId, 'carol')).ranking).toEqual(
       reviewReady()[0].manifest.ranking,
@@ -298,12 +348,27 @@ describe('StoryGameService — end of the story (phase 4a)', () => {
         {
           userId: 'alice',
           name: 'name-alice',
+          avatarUrl: null,
           panelsWritten: 1,
           totalScore: 150,
           averageScore: 150,
         },
-        { userId: 'bob', name: 'name-bob', panelsWritten: 1, totalScore: 70, averageScore: 70 },
-        { userId: 'carol', name: 'name-carol', panelsWritten: 0, totalScore: 0, averageScore: 0 },
+        {
+          userId: 'bob',
+          name: 'name-bob',
+          avatarUrl: null,
+          panelsWritten: 1,
+          totalScore: 70,
+          averageScore: 70,
+        },
+        {
+          userId: 'carol',
+          name: 'name-carol',
+          avatarUrl: null,
+          panelsWritten: 0,
+          totalScore: 0,
+          averageScore: 0,
+        },
       ]);
     });
   });

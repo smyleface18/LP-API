@@ -8,6 +8,8 @@ import { STORY_DEFAULT_CONFIG } from './story-game.config';
 import { StorySocket } from './types';
 import { SubmitPanelDraftDto } from './dto/submit-panel-draft.dto';
 import { ReviewManifest } from './domain/story-review';
+import { StoryAvatars } from './story-avatars.service';
+import { STORY_REACTIONS } from './story-game.config';
 
 const snapshot = (gameId = 'g1'): StorySnapshot => ({
   game: {
@@ -19,6 +21,7 @@ const snapshot = (gameId = 'g1'): StorySnapshot => ({
       {
         userId: 'alice',
         username: 'Alice',
+        avatarKey: 'avatar/alice.png',
         connected: true,
         left: false,
         joinedAt: 1,
@@ -96,6 +99,7 @@ describe('StoryGameGateway', () => {
     >
   >;
   let auth: { authenticateSocket: jest.Mock };
+  let avatars: { urlsFor: jest.Mock };
   let gateway: StoryGameGateway;
   let io: ReturnType<typeof fakeServer>;
   const client = (userId = 'alice', join = jest.fn()) =>
@@ -116,9 +120,11 @@ describe('StoryGameGateway', () => {
       getReviewManifest: jest.fn().mockResolvedValue(MANIFEST),
     };
     auth = { authenticateSocket: jest.fn().mockResolvedValue({ username: 'alice' }) };
+    avatars = { urlsFor: jest.fn().mockResolvedValue({ alice: 'https://signed/alice' }) };
     gateway = new StoryGameGateway(
       service as unknown as StoryGameService,
       auth as unknown as WsAuthService,
+      avatars as unknown as StoryAvatars,
     );
     io = fakeServer();
     gateway.server = io.server;
@@ -221,8 +227,8 @@ describe('StoryGameGateway', () => {
     expect(service.confirmPanel).toHaveBeenCalledWith('g1', 'alice', 2);
   });
 
-  it('relays turn events from any instance to the game room', () => {
-    gateway.onTurnStarted({
+  it('relays turn events from any instance to the game room', async () => {
+    await gateway.onTurnStarted({
       gameId: 'g1',
       panelOrder: 1,
       authorId: 'bob',
@@ -239,12 +245,12 @@ describe('StoryGameGateway', () => {
     ]);
   });
 
-  it('sends authorStatus to the whole room', () => {
-    gateway.onAuthorStatus({ gameId: 'g1', order: 0, status: 'reviewing' });
+  it('sends authorStatus to the whole room', async () => {
+    await gateway.onAuthorStatus({ gameId: 'g1', order: 0, status: 'reviewing' });
     expect(io.emitted).toEqual([['g1', 'authorStatus', { order: 0, status: 'reviewing' }]]);
   });
 
-  it('shares a reviewed draft with the room except all the sockets of its author', () => {
+  it('shares a reviewed draft with the room except all the sockets of its author', async () => {
     const draft = {
       order: 0,
       authorId: 'alice',
@@ -256,7 +262,7 @@ describe('StoryGameGateway', () => {
       corrections: [],
       characterCorrections: [],
     };
-    gateway.onDraftReviewed({ gameId: 'g1', ...draft });
+    await gateway.onDraftReviewed({ gameId: 'g1', ...draft });
     expect(io.emitted).toEqual([['g1!user:alice', 'panelDraftReviewed', draft]]);
   });
 
@@ -269,15 +275,75 @@ describe('StoryGameGateway', () => {
     expect(service.reactToPanel).toHaveBeenLastCalledWith('old', 'bob', 1, null);
   });
 
-  it('relays reactions with their gameId', () => {
+  it('relays reactions with their gameId', async () => {
     const reaction = { gameId: 'g1', order: 2, userId: 'bob', emoji: '🔥' as const };
-    gateway.onPanelReaction(reaction);
+    await gateway.onPanelReaction(reaction);
     expect(io.emitted).toEqual([['g1', 'panelReaction', reaction]]);
   });
 
-  it('sends storyReviewReady with the manifest to the room', () => {
-    gateway.onReviewReady({ gameId: 'g1', manifest: MANIFEST });
-    expect(io.emitted).toEqual([['g1', 'storyReviewReady', MANIFEST]]);
+  it('sends storyReviewReady with the manifest and signed avatars to the room', async () => {
+    await gateway.onReviewReady({ gameId: 'g1', snapshot: snapshot() });
+    expect(io.emitted).toEqual([
+      [
+        'g1',
+        'storyReviewReady',
+        expect.objectContaining({
+          gameId: 'g1',
+          ranking: [
+            expect.objectContaining({ userId: 'alice', avatarUrl: 'https://signed/alice' }),
+          ],
+        }),
+      ],
+    ]);
+  });
+
+  it('sends the signed avatar of each player in lobbyUpdated and the ack, never the key', async () => {
+    const ack = await gateway.handleCreate(client());
+    const [, , lobby] = io.emitted[0];
+    expect(lobby).toEqual(ack.data);
+    expect(ack.data?.players).toEqual([
+      {
+        userId: 'alice',
+        username: 'Alice',
+        avatarUrl: 'https://signed/alice',
+        connected: true,
+        left: false,
+      },
+    ]);
+    expect(avatars.urlsFor).toHaveBeenCalledWith(snapshot().game.players);
+  });
+
+  it('keeps the order of room events even when signing the avatars is slow', async () => {
+    let release!: () => void;
+    avatars.urlsFor.mockReturnValueOnce(new Promise((resolve) => (release = () => resolve({}))));
+    const stateChanged = gateway.onStateChanged({ snapshot: snapshot() });
+    const turnStarted = gateway.onTurnStarted({
+      gameId: 'g1',
+      panelOrder: 0,
+      authorId: 'alice',
+      endsAt: 5,
+      storySoFar: [],
+      cast: [],
+    });
+    expect(io.emitted).toEqual([]);
+
+    release();
+    await Promise.all([stateChanged, turnStarted]);
+    expect(io.emitted.map(([, event]) => event)).toEqual(['lobbyUpdated', 'turnStarted']);
+  });
+
+  it('keeps emitting after a failed emission', async () => {
+    avatars.urlsFor.mockRejectedValueOnce(new Error('S3 down'));
+    await gateway.onStateChanged({ snapshot: snapshot() });
+    await gateway.onAuthorStatus({ gameId: 'g1', order: 0, status: 'writing' });
+    expect(io.emitted.map(([, event]) => event)).toEqual(['authorStatus']);
+  });
+
+  it('serves the rules the client needs to build its forms', () => {
+    const { data } = gateway.handleGetRules();
+    expect(data?.reactions).toEqual(STORY_REACTIONS);
+    expect(data?.config.defaults).toEqual(STORY_DEFAULT_CONFIG);
+    expect(data?.players).toEqual({ min: 2, max: 6 });
   });
 
   it('serves the manifest of the game the client names and joins it to the room', async () => {

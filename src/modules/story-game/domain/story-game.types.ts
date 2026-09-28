@@ -57,6 +57,11 @@ export interface StoryConfig {
 export interface StoryPlayer {
   userId: string;
   username: string;
+  /**
+   * Key en S3 del avatar (no la URL: las URLs firmadas vencen). Se firma al
+   * enviar las vistas (`StoryAvatars`). Partidas viejas en Redis no la tienen.
+   */
+  avatarKey?: string | null;
   connected: boolean;
   /**
    * Salió de la partida después del lobby. Se queda en la lista porque el

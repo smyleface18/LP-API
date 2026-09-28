@@ -8,7 +8,6 @@ import {
   StoryCharacter,
   StorySnapshot,
 } from './story-game.types';
-import { ReviewManifest } from './story-review';
 
 /**
  * Eventos internos que emite StoryGameService al terminar una operación (ya
@@ -104,9 +103,13 @@ export interface ProcessingStartedEvent {
   gameId: string;
 }
 
+/**
+ * Entró a REVIEW. Lleva el estado y no el manifiesto: el gateway lo arma con
+ * los avatares firmados al momento de enviarlo.
+ */
 export interface ReviewReadyEvent {
   gameId: string;
-  manifest: ReviewManifest;
+  snapshot: StorySnapshot;
 }
 
 export type StoryOutboxItem =
