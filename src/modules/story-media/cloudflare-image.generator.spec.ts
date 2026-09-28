@@ -1,12 +1,14 @@
 import { CloudflareImageGenerator, FetchFn } from './cloudflare-image.generator';
+import { ImageFailureKind, ImageGenerationError } from './image-generator';
 import { buildPanelImagePrompt } from './panel-image-prompt';
-import { CF_IMAGE_STEPS, IMAGE_TIMEOUT_MS } from './story-media.config';
+import { CF_IMAGE_STEPS, DEFAULT_IMAGE_TIMEOUT_MS } from './story-media.config';
 import { PanelImageInput } from './story-media.types';
 
 const CONFIG = {
   accountId: 'acc-123',
   apiToken: 'token-abc',
   model: '@cf/black-forest-labs/flux-1-schnell',
+  timeoutMs: DEFAULT_IMAGE_TIMEOUT_MS,
 };
 
 const INPUT: PanelImageInput = {
@@ -32,6 +34,25 @@ const ok = (image: Buffer) =>
     errors: [],
     messages: [],
   });
+
+const cfError = (status: number, message: string) =>
+  jsonResponse(status, {
+    result: null,
+    success: false,
+    errors: [{ code: 10000, message }],
+    messages: [],
+  });
+
+/** Error que lanzó `generate`, para revisar su `kind`. */
+async function failureOf(promise: Promise<unknown>): Promise<ImageGenerationError> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(ImageGenerationError);
+    return error as ImageGenerationError;
+  }
+  throw new Error('expected generate to throw');
+}
 
 describe('CloudflareImageGenerator', () => {
   let fetchFn: jest.MockedFunction<FetchFn>;
@@ -68,37 +89,53 @@ describe('CloudflareImageGenerator', () => {
     expect((await generator.generate(INPUT)).contentType).toBe('image/png');
   });
 
-  it('throws on an HTTP error, with the message from Cloudflare', async () => {
-    fetchFn.mockResolvedValue(
-      jsonResponse(401, {
-        result: null,
-        success: false,
-        errors: [{ code: 10000, message: 'Authentication error' }],
-        messages: [],
-      }),
-    );
-    await expect(generator.generate(INPUT)).rejects.toThrow(
-      'Workers AI responded 401: Authentication error',
-    );
+  it.each<[number, ImageFailureKind]>([
+    [400, 'permanent'],
+    [401, 'permanent'],
+    [403, 'permanent'],
+    [404, 'permanent'],
+    [429, 'rate-limited'],
+    [500, 'transient'],
+    [503, 'transient'],
+  ])('classifies HTTP %i as %s, with the message from Cloudflare', async (status, kind) => {
+    fetchFn.mockResolvedValue(cfError(status, 'Something went wrong'));
+    const error = await failureOf(generator.generate(INPUT));
+    expect(error.kind).toBe(kind);
+    expect(error.message).toBe(`Workers AI responded ${status}: Something went wrong`);
   });
 
-  it('throws on an HTTP error without a JSON body', async () => {
+  it('classifies an HTTP error without a JSON body by its status', async () => {
     fetchFn.mockResolvedValue(new Response('Bad gateway', { status: 502 }));
-    await expect(generator.generate(INPUT)).rejects.toThrow('Workers AI responded 502');
+    const error = await failureOf(generator.generate(INPUT));
+    expect(error.kind).toBe('transient');
+    expect(error.message).toMatch(/^Workers AI responded 502/);
   });
 
-  it('throws when the response has no image', async () => {
+  it('fails permanently when the response has no image', async () => {
     fetchFn.mockResolvedValue(jsonResponse(200, { result: {}, success: true, errors: [] }));
-    await expect(generator.generate(INPUT)).rejects.toThrow('Workers AI returned no image');
+    const error = await failureOf(generator.generate(INPUT));
+    expect(error).toMatchObject({ kind: 'permanent', message: 'Workers AI returned no image' });
   });
 
-  it('throws when the image is not a JPEG or a PNG', async () => {
+  it('fails permanently when the image is not a JPEG or a PNG', async () => {
     fetchFn.mockResolvedValue(ok(Buffer.from('not an image')));
-    await expect(generator.generate(INPUT)).rejects.toThrow('unknown image format');
+    const error = await failureOf(generator.generate(INPUT));
+    expect(error.kind).toBe('permanent');
+    expect(error.message).toMatch(/unknown image format/);
   });
 
-  it(`aborts the request and throws after ${IMAGE_TIMEOUT_MS} ms`, async () => {
+  it('treats a network error as transient', async () => {
+    fetchFn.mockRejectedValue(new TypeError('fetch failed'));
+    const error = await failureOf(generator.generate(INPUT));
+    expect(error).toMatchObject({
+      kind: 'transient',
+      message: 'Workers AI request failed: fetch failed',
+    });
+  });
+
+  it('aborts the request after timeoutMs and fails as transient', async () => {
     jest.useFakeTimers();
+    generator = new CloudflareImageGenerator({ ...CONFIG, timeoutMs: 5_000 }, fetchFn);
     let signal: AbortSignal | undefined;
     fetchFn.mockImplementation(
       (_url, init) =>
@@ -108,13 +145,15 @@ describe('CloudflareImageGenerator', () => {
         }),
     );
 
-    const result = generator.generate(INPUT);
-    const assertion = expect(result).rejects.toThrow(`timed out after ${IMAGE_TIMEOUT_MS} ms`);
-    await jest.advanceTimersByTimeAsync(IMAGE_TIMEOUT_MS - 1);
+    const failure = failureOf(generator.generate(INPUT));
+    await jest.advanceTimersByTimeAsync(4_999);
     expect(signal?.aborted).toBe(false);
     await jest.advanceTimersByTimeAsync(1);
 
-    await assertion;
+    expect(await failure).toMatchObject({
+      kind: 'transient',
+      message: 'Workers AI timed out after 5000 ms',
+    });
     expect(signal?.aborted).toBe(true);
   });
 });

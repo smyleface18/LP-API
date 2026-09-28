@@ -55,6 +55,21 @@ describe('createImageGenerator', () => {
     );
   });
 
+  const timeoutOf = (generator: unknown) =>
+    (generator as { config: { timeoutMs: number } }).config.timeoutMs;
+
+  it('times out after 20 s by default, or after IMAGE_TIMEOUT_MS', () => {
+    expect(timeoutOf(createImageGenerator(envsWith(CLOUDFLARE)))).toBe(20_000);
+    expect(
+      timeoutOf(createImageGenerator(envsWith({ ...CLOUDFLARE, IMAGE_TIMEOUT_MS: '8000' }))),
+    ).toBe(8_000);
+  });
+
+  it.each(['0', '-5', 'abc', '1.5'])('fails to start with IMAGE_TIMEOUT_MS=%s', (value) => {
+    const envs = envsWith({ ...CLOUDFLARE, IMAGE_TIMEOUT_MS: value });
+    expect(() => createImageGenerator(envs)).toThrow(`Invalid IMAGE_TIMEOUT_MS "${value}"`);
+  });
+
   it('fails to start with an unknown provider', () => {
     expect(() => createImageGenerator(envsWith({ IMAGE_PROVIDER: 'nova' }))).toThrow(
       'Invalid IMAGE_PROVIDER "nova": use one of none, cloudflare',

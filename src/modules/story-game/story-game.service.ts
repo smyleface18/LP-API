@@ -23,7 +23,8 @@ import { ReviewManifest, toReviewManifest } from './domain/story-review';
 import {
   DraftInput,
   PanelConfirmedBy,
-  PanelMedia,
+  PanelAudioResult,
+  PanelImageResult,
   PanelState,
   STORY_ABANDONABLE_STATUSES,
   STORY_ENDED_STATUSES,
@@ -73,6 +74,10 @@ type Mutation = (snapshot: StorySnapshot, outbox: StoryOutboxItem[]) => StoryCha
  * atómica con fencing → programar/cancelar tareas diferidas → publicar
  * eventos. El gateway traduce eventos y difunde el resultado.
  */
+/** A la viñeta le falta el audio o la imagen. */
+const hasPendingMedia = (panel: PanelState) =>
+  panel.media?.status === 'pending' || panel.media?.imageStatus === 'pending';
+
 @Injectable()
 export class StoryGameService {
   private readonly logger = new Logger(StoryGameService.name);
@@ -520,34 +525,84 @@ export class StoryGameService {
   }
 
   /**
-   * Resultado de la media de una viñeta (StoryMediaProcessor). Se descarta si
-   * la viñeta ya no está `pending` (ej. venció el plazo): el primer resultado gana.
+   * Audio de una viñeta (tarea `panel-audio`). Con audio la viñeta queda
+   * `ready` aunque la imagen siga pendiente: la imagen llega después con otro
+   * `panelMediaReady`. Se descarta si el audio ya no está `pending` (venció el
+   * plazo): el primer resultado gana.
    */
-  async onPanelMedia(gameId: string, order: number, media: PanelMedia): Promise<void> {
+  async onPanelAudio(gameId: string, order: number, audio: PanelAudioResult): Promise<void> {
     await this.mutate(gameId, (snapshot, outbox) => {
       const panel = snapshot.panels[order];
-      if (panel?.media?.status !== 'pending') return null;
+      if (!panel?.media || panel.media.status !== 'pending') return null;
 
-      panel.media = media;
+      panel.media = { ...panel.media, ...audio };
       this.afterMediaSettled(snapshot, [panel], outbox);
       return { game: snapshot.game, setPanels: [panel] };
     });
     await this.advanceAfterMedia(gameId);
   }
 
-  /** Tarea `media-deadline`: lo que siga `pending` queda `failed` y la partida avanza. */
+  /**
+   * Imagen de una viñeta (tarea `panel-image`). Se descarta si la imagen ya no
+   * está `pending`. Si el proveedor respondió 429, las demás imágenes
+   * pendientes de la historieta quedan `failed` y sus tareas no lo llaman.
+   */
+  async onPanelImage(
+    gameId: string,
+    order: number,
+    { imageStatus, imageKey, rateLimited }: PanelImageResult,
+  ): Promise<void> {
+    await this.mutate(gameId, (snapshot, outbox) => {
+      const panel = snapshot.panels[order];
+      if (!panel?.media || panel.media.imageStatus !== 'pending') return null;
+
+      panel.media = { ...panel.media, imageStatus, imageKey };
+      const settled = [panel];
+      if (rateLimited) {
+        for (const other of closedPanels(snapshot)) {
+          if (other === panel || other.media?.imageStatus !== 'pending') continue;
+          other.media = { ...other.media, imageStatus: 'failed' };
+          settled.push(other);
+        }
+        this.logger.warn(
+          `story ${gameId}: image provider rate limited, ${settled.length - 1} images skipped`,
+        );
+      }
+      this.afterMediaSettled(snapshot, settled, outbox);
+      return { game: snapshot.game, setPanels: settled };
+    });
+    await this.advanceAfterMedia(gameId);
+  }
+
+  /**
+   * Si todavía hay que dibujar la viñeta: no venció el plazo, no hubo un 429
+   * en la historieta y la partida sigue en Redis. La tarea `panel-image` lo
+   * consulta antes de llamar al proveedor.
+   */
+  async isImagePending(gameId: string, order: number): Promise<boolean> {
+    const snapshot = await this.store.get(gameId);
+    return snapshot?.panels[order]?.media?.imageStatus === 'pending';
+  }
+
+  /**
+   * Tarea `media-deadline`: lo que siga `pending` (audio o imagen) queda
+   * `failed` y la partida avanza. Un audio ya generado nunca se descarta.
+   */
   async expireMedia(gameId: string, dueAt: number): Promise<void> {
     await this.mutate(gameId, (snapshot, outbox) => {
       if (snapshot.game.mediaDeadlineAt !== dueAt) return null;
 
-      const expired = closedPanels(snapshot).filter((panel) => panel.media?.status === 'pending');
+      const expired = closedPanels(snapshot).filter(hasPendingMedia);
       for (const panel of expired) {
+        const media = panel.media!;
         panel.media = {
-          status: 'failed',
-          audioKey: null,
-          imageKey: null,
-          imageStatus: 'failed',
-          speechMarks: null,
+          ...media,
+          ...(media.status === 'pending'
+            ? { status: 'failed' as const, audioKey: null, speechMarks: null }
+            : {}),
+          ...(media.imageStatus === 'pending'
+            ? { imageStatus: 'failed' as const, imageKey: null }
+            : {}),
         };
       }
       this.logger.warn(`story ${gameId}: media deadline expired (${expired.length} pending)`);
@@ -558,7 +613,10 @@ export class StoryGameService {
     await this.advanceAfterMedia(gameId);
   }
 
-  /** Eventos de las viñetas que terminaron; sin nada pendiente se quita el plazo. */
+  /**
+   * Eventos de las viñetas que cambiaron; sin nada pendiente (audio ni imagen)
+   * se quita el plazo. El avance de PROCESSING cuenta los audios.
+   */
   private afterMediaSettled(
     snapshot: StorySnapshot,
     settled: PanelState[],
@@ -573,7 +631,7 @@ export class StoryGameService {
     }
     const withMedia = closedPanels(snapshot).filter((p) => p.media && p.media.status !== 'none');
     const done = withMedia.filter((p) => p.media!.status !== 'pending').length;
-    if (done === withMedia.length) game.mediaDeadlineAt = null;
+    if (!closedPanels(snapshot).some(hasPendingMedia)) game.mediaDeadlineAt = null;
     if (game.status === StoryStatus.PROCESSING) {
       outbox.push({
         event: STORY_EVENTS.processing,
@@ -583,21 +641,21 @@ export class StoryGameService {
   }
 
   /**
-   * PROCESSING -> REVIEW cuando la primera viñeta ya no está pendiente, y
-   * REVIEW -> FINISHED cuando ninguna lo está. Una viñeta sin `media` (partida
-   * de antes de la Fase 4b) cuenta como terminada.
+   * PROCESSING -> REVIEW cuando la primera viñeta tiene su audio (o falló), y
+   * REVIEW -> FINISHED cuando no queda nada pendiente, ni audio ni imagen. Una
+   * viñeta sin `media` (partida de antes de la Fase 4b) cuenta como terminada.
    */
   private async advanceAfterMedia(gameId: string): Promise<void> {
-    const pending = (snapshot: StorySnapshot) =>
-      closedPanels(snapshot).filter((panel) => panel.media?.status === 'pending');
-
     let snapshot = await this.getSnapshot(gameId);
     const [first] = closedPanels(snapshot);
     if (snapshot.game.status === StoryStatus.PROCESSING && first?.media?.status !== 'pending') {
       await this.enterReview(gameId);
       snapshot = await this.getSnapshot(gameId);
     }
-    if (snapshot.game.status === StoryStatus.REVIEW && pending(snapshot).length === 0) {
+    if (
+      snapshot.game.status === StoryStatus.REVIEW &&
+      !closedPanels(snapshot).some(hasPendingMedia)
+    ) {
       await this.finishStory(gameId);
     }
   }

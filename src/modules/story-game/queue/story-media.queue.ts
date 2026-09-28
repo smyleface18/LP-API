@@ -3,12 +3,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Queue } from 'bullmq';
 import { MediaRequestedEvent, STORY_EVENTS } from '../domain/story-game.events';
-import { STORY_MEDIA_QUEUE, storyMediaJobId } from './type';
+import { STORY_MEDIA_QUEUE, STORY_MEDIA_JOB_PRIORITY, storyMediaJobId } from './type';
 
 /**
- * Encola una tarea por viñeta en `story-media` (Fase 4b). En orden: la
- * primera viñeta sale primero, y es la que habilita el REVIEW. Si una tarea se
- * pierde, `media-deadline` termina la historieta igual.
+ * Encola dos tareas por viñeta en `story-media`: `panel-audio` y
+ * `panel-image`. Los audios tienen prioridad: salen todos antes que las
+ * imágenes, así una imagen lenta nunca demora el audio de otra viñeta. Dentro
+ * de cada tipo, en orden: la primera viñeta sale primero, y su audio es el que
+ * habilita el REVIEW. Si una tarea se pierde, `media-deadline` termina la
+ * historieta igual.
  */
 @Injectable()
 export class StoryMediaQueue {
@@ -20,16 +23,19 @@ export class StoryMediaQueue {
   async enqueue({ gameId, panels }: MediaRequestedEvent): Promise<void> {
     try {
       await this.queue.addBulk(
-        panels.map((panel) => ({
-          name: 'panel-media',
-          data: panel,
-          opts: {
-            // Id fijo: si el evento se repite, BullMQ no duplica la tarea.
-            jobId: storyMediaJobId(gameId, panel.order),
-            removeOnComplete: true,
-            removeOnFail: true,
-          },
-        })),
+        (['panel-audio', 'panel-image'] as const).flatMap((name) =>
+          panels.map((panel) => ({
+            name,
+            data: panel,
+            opts: {
+              // Id fijo: si el evento se repite, BullMQ no duplica la tarea.
+              jobId: storyMediaJobId(gameId, name, panel.order),
+              priority: STORY_MEDIA_JOB_PRIORITY[name],
+              removeOnComplete: true,
+              removeOnFail: true,
+            },
+          })),
+        ),
       );
       this.logger.debug(`story ${gameId}: ${panels.length} panels queued for media`);
     } catch (error) {

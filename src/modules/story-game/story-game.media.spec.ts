@@ -8,7 +8,12 @@ import {
   StoryProcessingEvent,
   StoryStateChangedEvent,
 } from './domain/story-game.events';
-import { DraftInput, PanelMedia, StoryStatus } from './domain/story-game.types';
+import {
+  DraftInput,
+  PanelAudioResult,
+  PanelImageResult,
+  StoryStatus,
+} from './domain/story-game.types';
 import { MEDIA_DEADLINE_MS } from './story-game.config';
 import { createStoryHarness } from '../../../test/story-game/story-harness';
 
@@ -22,19 +27,17 @@ const draft = (overrides: Partial<DraftInput> = {}): DraftInput => ({
   ...overrides,
 });
 
-const ready = (order: number): PanelMedia => ({
+const audio = (order: number): PanelAudioResult => ({
   status: 'ready',
   audioKey: `story/s/panel-${order}.mp3`,
-  imageKey: `story/s/panel-${order}.png`,
   speechMarks: [{ time: 0, start: 0, end: 3, value: 'The' }],
 });
-const FAILED: PanelMedia = {
-  status: 'failed',
-  audioKey: null,
-  imageKey: null,
-  imageStatus: 'failed',
-  speechMarks: null,
-};
+const AUDIO_FAILED: PanelAudioResult = { status: 'failed', audioKey: null, speechMarks: null };
+const image = (order: number): PanelImageResult => ({
+  imageStatus: 'ready',
+  imageKey: `story/s/panel-${order}.jpg`,
+});
+const IMAGE_FAILED: PanelImageResult = { imageStatus: 'failed', imageKey: null };
 
 describe('StoryGameService — story media (phase 4b)', () => {
   const T0 = 1_800_000_000_000;
@@ -112,6 +115,12 @@ describe('StoryGameService — story media (phase 4b)', () => {
       'pending',
       'none',
     ]);
+    expect([0, 1, 2, 3].map((order) => stored[order].media?.imageStatus)).toEqual([
+      'pending',
+      'pending',
+      'pending',
+      'none',
+    ]);
     expect(h.emitted<StoryProcessingEvent>(STORY_EVENTS.processing)).toEqual([
       { gameId, panelsTotal: 3, panelsDone: 0 },
     ]);
@@ -127,10 +136,20 @@ describe('StoryGameService — story media (phase 4b)', () => {
     expect((await h.gameOf(gameId)).storyId).toBe(storyId);
   });
 
-  it('stays in PROCESSING until the first panel has its media', async () => {
+  /** Audio e imagen de las viñetas `orders`, en ese orden. */
+  async function completeMedia(gameId: string, orders: number[]) {
+    for (const order of orders) {
+      await service.onPanelAudio(gameId, order, audio(order));
+      await service.onPanelImage(gameId, order, image(order));
+    }
+  }
+
+  const mediaOf = async (gameId: string, order: number) =>
+    (await h.snapshotOf(gameId)).panels[order].media;
+
+  it('stays in PROCESSING until the first panel has its audio', async () => {
     const gameId = await storyInProcessing();
-    await service.onPanelMedia(gameId, 2, ready(2));
-    await service.onPanelMedia(gameId, 1, ready(1));
+    await completeMedia(gameId, [2, 1]);
 
     expect(await status(gameId)).toBe(StoryStatus.PROCESSING);
     expect(h.emitted<StoryProcessingEvent>(STORY_EVENTS.processing).at(-1)).toEqual({
@@ -139,60 +158,113 @@ describe('StoryGameService — story media (phase 4b)', () => {
       panelsDone: 2,
     });
 
-    await service.onPanelMedia(gameId, 0, ready(0));
-    // La última pendiente era la primera: pasa por REVIEW y termina.
+    await service.onPanelAudio(gameId, 0, audio(0));
+    expect(await status(gameId)).toBe(StoryStatus.REVIEW);
+    // Falta la imagen de la primera: la historieta todavía no termina.
+    await service.onPanelImage(gameId, 0, image(0));
     expect(statuses().slice(-2)).toEqual([StoryStatus.REVIEW, StoryStatus.FINISHED]);
   });
 
-  it('enters REVIEW with the first panel and FINISHES with the last one', async () => {
+  it('marks the panel ready with its audio, and the image arrives later', async () => {
     const gameId = await storyInProcessing();
-    await service.onPanelMedia(gameId, 0, ready(0));
+    await service.onPanelAudio(gameId, 0, audio(0));
+
+    expect(await mediaOf(gameId, 0)).toEqual({
+      ...audio(0),
+      imageKey: null,
+      imageStatus: 'pending',
+    });
     expect(await status(gameId)).toBe(StoryStatus.REVIEW);
 
-    await service.onPanelMedia(gameId, 1, FAILED);
+    await service.onPanelImage(gameId, 0, image(0));
+    expect(await mediaOf(gameId, 0)).toMatchObject({ status: 'ready', ...image(0) });
+
+    const updates = h.emitted<PanelMediaReadyEvent>(STORY_EVENTS.panelMediaReady);
+    expect(updates.map(({ order, media }) => [order, media.status, media.imageStatus])).toEqual([
+      [0, 'ready', 'pending'],
+      [0, 'ready', 'ready'],
+    ]);
+  });
+
+  it('FINISHES once no audio or image is pending', async () => {
+    const gameId = await storyInProcessing();
+    await completeMedia(gameId, [0]);
+    await service.onPanelAudio(gameId, 1, AUDIO_FAILED);
+    await service.onPanelImage(gameId, 1, IMAGE_FAILED);
+    await service.onPanelAudio(gameId, 2, audio(2));
     expect(await status(gameId)).toBe(StoryStatus.REVIEW);
 
-    await service.onPanelMedia(gameId, 2, ready(2));
+    await service.onPanelImage(gameId, 2, { imageStatus: 'none', imageKey: null });
     expect(await status(gameId)).toBe(StoryStatus.FINISHED);
     expect((await h.gameOf(gameId)).mediaDeadlineAt).toBeNull();
     expect(h.cancelled('media-deadline')).toHaveLength(1);
 
     const [{ snapshot }] = h.emitted<StoryFinishedEvent>(STORY_EVENTS.finished);
-    expect(snapshot.panels[0].media).toEqual(ready(0));
-    expect(snapshot.panels[1].media).toEqual(FAILED);
-    expect(
-      h.emitted<PanelMediaReadyEvent>(STORY_EVENTS.panelMediaReady).map(({ order }) => order),
-    ).toEqual([0, 1, 2]);
+    expect(snapshot.panels[0].media).toEqual({ ...audio(0), ...image(0) });
+    expect(snapshot.panels[1].media).toEqual({ ...AUDIO_FAILED, ...IMAGE_FAILED });
+    expect(snapshot.panels[2].media?.imageStatus).toBe('none');
   });
 
   it('puts the media in the manifest, signed', async () => {
     h.urls.mediaFor.mockResolvedValue({
-      0: { audioUrl: 'https://signed/0.mp3', imageUrl: 'https://signed/0.png' },
+      0: { audioUrl: 'https://signed/0.mp3', imageUrl: 'https://signed/0.jpg' },
     });
     const gameId = await storyInProcessing();
-    await service.onPanelMedia(gameId, 0, ready(0));
+    await completeMedia(gameId, [0]);
 
     const manifest = await service.getReviewManifest(gameId, 'alice');
     expect(manifest.panels[0]).toMatchObject({
       mediaStatus: 'ready',
+      imageStatus: 'ready',
       audioUrl: 'https://signed/0.mp3',
-      imageUrl: 'https://signed/0.png',
-      speechMarks: ready(0).speechMarks,
+      imageUrl: 'https://signed/0.jpg',
+      speechMarks: audio(0).speechMarks,
     });
-    expect(manifest.panels[1]).toMatchObject({ mediaStatus: 'pending', audioUrl: null });
+    expect(manifest.panels[1]).toMatchObject({
+      mediaStatus: 'pending',
+      imageStatus: 'pending',
+      audioUrl: null,
+    });
   });
 
-  it('ignores a result for a panel that is no longer pending', async () => {
+  it('ignores an audio or an image that is no longer pending', async () => {
     const gameId = await storyInProcessing();
-    await service.onPanelMedia(gameId, 0, FAILED);
-    await service.onPanelMedia(gameId, 0, ready(0));
+    await service.onPanelAudio(gameId, 0, AUDIO_FAILED);
+    await service.onPanelAudio(gameId, 0, audio(0));
+    await service.onPanelImage(gameId, 0, IMAGE_FAILED);
+    await service.onPanelImage(gameId, 0, image(0));
 
-    expect((await h.snapshotOf(gameId)).panels[0].media).toEqual(FAILED);
+    expect(await mediaOf(gameId, 0)).toEqual({ ...AUDIO_FAILED, ...IMAGE_FAILED });
   });
 
-  it('fails whatever is still pending when the deadline expires', async () => {
+  it('skips the images left in the story after a 429, and keeps the ones already drawn', async () => {
     const gameId = await storyInProcessing();
-    await service.onPanelMedia(gameId, 0, ready(0));
+    await completeMedia(gameId, [0]);
+    await service.onPanelAudio(gameId, 1, audio(1));
+    expect(await service.isImagePending(gameId, 2)).toBe(true);
+
+    await service.onPanelImage(gameId, 1, { ...IMAGE_FAILED, rateLimited: true });
+
+    expect((await mediaOf(gameId, 0))?.imageStatus).toBe('ready');
+    expect((await mediaOf(gameId, 1))?.imageStatus).toBe('failed');
+    expect(await mediaOf(gameId, 2)).toMatchObject({ status: 'pending', imageStatus: 'failed' });
+    expect(await service.isImagePending(gameId, 2)).toBe(false);
+    // El audio de la viñeta 2 sigue pendiente: la historieta no termina.
+    expect(await status(gameId)).toBe(StoryStatus.REVIEW);
+
+    await service.onPanelAudio(gameId, 2, audio(2));
+    expect(await status(gameId)).toBe(StoryStatus.FINISHED);
+  });
+
+  it('isImagePending is false for a game that no longer exists', async () => {
+    expect(await service.isImagePending('missing-game', 0)).toBe(false);
+  });
+
+  it('on the deadline, fails what is pending but never an audio already generated', async () => {
+    const gameId = await storyInProcessing();
+    await completeMedia(gameId, [0]);
+    // La viñeta 1 tiene audio pero la imagen sigue pendiente; la 2 no tiene nada.
+    await service.onPanelAudio(gameId, 1, audio(1));
     const { mediaDeadlineAt } = await h.gameOf(gameId);
 
     // Una tarea vieja (otro dueAt) no hace nada.
@@ -201,14 +273,15 @@ describe('StoryGameService — story media (phase 4b)', () => {
 
     h.clock.now = mediaDeadlineAt!;
     await service.expireMedia(gameId, mediaDeadlineAt!);
-    const { panels } = await h.snapshotOf(gameId);
-    expect(panels[1].media).toEqual(FAILED);
-    expect(panels[2].media).toEqual(FAILED);
+    expect(await mediaOf(gameId, 1)).toEqual({ ...audio(1), ...IMAGE_FAILED });
+    expect(await mediaOf(gameId, 2)).toEqual({ ...AUDIO_FAILED, ...IMAGE_FAILED });
     expect(await status(gameId)).toBe(StoryStatus.FINISHED);
 
     // Lo que llegue tarde se descarta.
-    await service.onPanelMedia(gameId, 1, ready(1));
-    expect((await h.snapshotOf(gameId)).panels[1].media).toEqual(FAILED);
+    await service.onPanelAudio(gameId, 2, audio(2));
+    await service.onPanelImage(gameId, 1, image(1));
+    expect((await mediaOf(gameId, 2))?.status).toBe('failed');
+    expect((await mediaOf(gameId, 1))?.imageStatus).toBe('failed');
   });
 
   it('also leaves PROCESSING when the deadline expires before the first panel', async () => {

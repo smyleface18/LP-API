@@ -1,12 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { StorageService } from '@/common/src/storage/storage.service';
 import { SpeechSynthesizer } from './speech-synthesizer';
-import { ImageGenerator } from './image-generator';
+import { ImageFailureKind, ImageGenerationError, ImageGenerator } from './image-generator';
 import {
   GeneratedImage,
+  PanelAudioResult,
   PanelImageInput,
+  PanelImageResult,
   PanelMediaRequest,
-  PanelMediaResult,
 } from './story-media.types';
 import { seedForGame } from './panel-image-prompt';
 import { IMAGE_RETRY_DELAYS_MS, StoryMediaExtension, storyMediaKey } from './story-media.config';
@@ -18,14 +19,14 @@ const IMAGE_EXTENSIONS: Record<string, StoryMediaExtension> = {
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Un error que no es `ImageGenerationError` (ej. un bug del adaptador) se trata como pasajero. */
+const failureKindOf = (error: unknown): ImageFailureKind =>
+  error instanceof ImageGenerationError ? error.kind : 'transient';
+
 /**
- * Genera la media de una viñeta: narra el texto y la dibuja en paralelo, y
- * sube los dos archivos a S3 (bucket privado; las URLs se firman al enviar).
- *
- * - `status: 'ready'`: el audio se generó y se subió; `'failed'`: no hay audio.
- *   La viñeta se puede leer igual.
- * - `imageStatus`: `ready`, `failed` (el dibujante falló en todos los
- *   intentos, o no se pudo subir) o `none` (no hay proveedor de imágenes).
+ * Genera la media de una viñeta y la sube a S3 (bucket privado; las URLs se
+ * firman al enviar). El audio y la imagen son tareas separadas: la viñeta
+ * queda lista con el audio, y la imagen llega después.
  *
  * Nunca lanza: un error de S3 cuenta como que ese archivo no se generó.
  */
@@ -39,67 +40,75 @@ export class StoryMediaService {
     private readonly storage: StorageService,
   ) {}
 
-  async generatePanel(request: PanelMediaRequest): Promise<PanelMediaResult> {
+  /** Narra el texto: `ready` si el audio se generó y se subió, `failed` si no. */
+  async generateAudio(request: PanelMediaRequest): Promise<PanelAudioResult> {
     const { gameId, storyId, order } = request;
-    const [speech, image] = await Promise.all([
-      this.speech.synthesize(request.text, request.languageCode),
-      this.drawWithRetries(`story ${gameId} panel ${order}`, {
-        seed: seedForGame(gameId),
-        scene: request.scene,
-        text: request.text,
-        characters: request.characters,
-      }),
-    ]);
+    const speech = await this.speech.synthesize(request.text, request.languageCode);
+    const audioKey =
+      speech &&
+      (await this.upload(storyMediaKey(storyId, order, 'mp3'), speech.audio, speech.contentType));
 
-    const [audioKey, imageKey] = await Promise.all([
-      speech && this.upload(storyMediaKey(storyId, order, 'mp3'), speech.audio, speech.contentType),
-      image !== 'failed' &&
-        image &&
-        this.upload(
-          storyMediaKey(storyId, order, IMAGE_EXTENSIONS[image.contentType] ?? 'png'),
-          image.image,
-          image.contentType,
-        ),
-    ]);
-
-    const imageStatus = imageKey ? 'ready' : image === null ? 'none' : 'failed';
-    this.logger.debug(`story ${gameId} panel ${order}: audio=${!!audioKey} image=${imageStatus}`);
-    return audioKey
-      ? {
-          status: 'ready',
-          audioKey,
-          imageKey: imageKey || null,
-          imageStatus,
-          speechMarks: speech!.speechMarks,
-        }
-      : {
-          status: 'failed',
-          audioKey: null,
-          imageKey: imageKey || null,
-          imageStatus,
-          speechMarks: null,
-        };
+    this.logger.debug(`story ${gameId} panel ${order}: audio=${!!audioKey}`);
+    if (!speech || !audioKey) return { status: 'failed', audioKey: null, speechMarks: null };
+    return { status: 'ready', audioKey, speechMarks: speech.speechMarks };
   }
 
   /**
-   * Dibuja la viñeta; si el dibujante lanza, reintenta tras cada espera de
-   * IMAGE_RETRY_DELAYS_MS. `null` = no hay proveedor; `'failed'` = fallaron
-   * todos los intentos.
+   * Dibuja la viñeta: `ready` si la imagen se generó y se subió, `none` si no
+   * hay proveedor, `failed` si el proveedor falló (ver `drawWithRetries`) o no
+   * se pudo subir. `rateLimited` avisa que las demás viñetas no deben pedirla.
+   */
+  async generateImage(request: PanelMediaRequest): Promise<PanelImageResult> {
+    const { gameId, storyId, order } = request;
+    const drawn = await this.drawWithRetries(`story ${gameId} panel ${order}`, {
+      seed: seedForGame(gameId),
+      scene: request.scene,
+      text: request.text,
+      characters: request.characters,
+    });
+
+    if (drawn === null) return { imageStatus: 'none', imageKey: null };
+    if ('failure' in drawn) {
+      return {
+        imageStatus: 'failed',
+        imageKey: null,
+        rateLimited: drawn.failure === 'rate-limited',
+      };
+    }
+
+    const { image, contentType } = drawn;
+    const extension = IMAGE_EXTENSIONS[contentType] ?? 'png';
+    const imageKey = await this.upload(
+      storyMediaKey(storyId, order, extension),
+      image,
+      contentType,
+    );
+    this.logger.debug(`story ${gameId} panel ${order}: image=${!!imageKey}`);
+    return imageKey
+      ? { imageStatus: 'ready', imageKey }
+      : { imageStatus: 'failed', imageKey: null };
+  }
+
+  /**
+   * Dibuja la viñeta según el tipo de error: `transient` se reintenta tras
+   * cada espera de IMAGE_RETRY_DELAYS_MS (hasta 3 intentos); `permanent` y
+   * `rate-limited` no se reintentan. `null` = no hay proveedor.
    */
   private async drawWithRetries(
     label: string,
     input: PanelImageInput,
-  ): Promise<GeneratedImage | null | 'failed'> {
+  ): Promise<GeneratedImage | null | { failure: ImageFailureKind }> {
     for (let attempt = 0; ; attempt++) {
       try {
         return await this.images.generate(input);
       } catch (error) {
-        const delay = IMAGE_RETRY_DELAYS_MS[attempt];
+        const failure = failureKindOf(error);
+        const delay = failure === 'transient' ? IMAGE_RETRY_DELAYS_MS[attempt] : undefined;
         this.logger.warn(
-          `${label}: image attempt ${attempt + 1} failed: ${(error as Error).message}` +
+          `${label}: image attempt ${attempt + 1} failed (${failure}): ${(error as Error).message}` +
             (delay === undefined ? '' : ` (retrying in ${delay} ms)`),
         );
-        if (delay === undefined) return 'failed';
+        if (delay === undefined) return { failure };
         await wait(delay);
       }
     }

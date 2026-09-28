@@ -1,13 +1,15 @@
-import { ImageGenerator } from './image-generator';
+import { ImageGenerationError, ImageGenerator, ImageFailureKind } from './image-generator';
 import { GeneratedImage, PanelImageInput } from './story-media.types';
 import { buildPanelImagePrompt } from './panel-image-prompt';
-import { CF_IMAGE_STEPS, IMAGE_TIMEOUT_MS } from './story-media.config';
+import { CF_IMAGE_STEPS } from './story-media.config';
 
 export interface CloudflareImageConfig {
   accountId: string;
   apiToken: string;
   /** Ej. `@cf/black-forest-labs/flux-1-schnell`. */
   model: string;
+  /** Tiempo máximo de cada petición (`IMAGE_TIMEOUT_MS`). */
+  timeoutMs: number;
 }
 
 /** Lo que se usa de `fetch` (facilita el mock en tests). */
@@ -18,6 +20,13 @@ interface WorkersAiResponse {
   success?: boolean;
   errors?: { code?: number; message?: string }[];
   result?: { image?: string };
+}
+
+/** 429: cuota superada. 5xx: error del servicio, se reintenta. Cualquier otro 4xx no. */
+function failureKindOf(status: number): ImageFailureKind {
+  if (status === 429) return 'rate-limited';
+  if (status >= 500) return 'transient';
+  return 'permanent';
 }
 
 /**
@@ -37,8 +46,8 @@ function imageTypeOf(bytes: Uint8Array): string | null {
  * /accounts/{id}/ai/run/{model}`). Una imagen por viñeta, con la semilla de la
  * partida para que el estilo se mantenga entre viñetas.
  *
- * Lanza si la API falla, responde sin imagen o tarda más de IMAGE_TIMEOUT_MS:
- * los reintentos los hace `StoryMediaService`.
+ * Lanza un `ImageGenerationError` si la API falla, responde sin imagen o tarda
+ * más de `timeoutMs`; su `kind` decide si `StoryMediaService` reintenta.
  */
 export class CloudflareImageGenerator extends ImageGenerator {
   constructor(
@@ -49,11 +58,11 @@ export class CloudflareImageGenerator extends ImageGenerator {
   }
 
   async generate(input: PanelImageInput): Promise<GeneratedImage> {
-    const { accountId, apiToken, model } = this.config;
+    const { accountId, apiToken, model, timeoutMs } = this.config;
     const url = `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/run/${model}`;
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), IMAGE_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await this.fetchFn(url, {
         method: 'POST',
@@ -69,20 +78,30 @@ export class CloudflareImageGenerator extends ImageGenerator {
       const body = (await response.json().catch(() => null)) as WorkersAiResponse | null;
       if (!response.ok || body?.success === false) {
         const reason = body?.errors?.map((e) => e.message).join('; ') || response.statusText;
-        throw new Error(`Workers AI responded ${response.status}: ${reason}`);
+        throw new ImageGenerationError(
+          `Workers AI responded ${response.status}: ${reason}`,
+          response.ok ? 'permanent' : failureKindOf(response.status),
+        );
       }
 
       const encoded = body?.result?.image;
-      if (!encoded) throw new Error('Workers AI returned no image');
+      if (!encoded) throw new ImageGenerationError('Workers AI returned no image', 'permanent');
       const image = Buffer.from(encoded, 'base64');
       const contentType = imageTypeOf(image);
-      if (!contentType) throw new Error('Workers AI returned an unknown image format');
+      if (!contentType) {
+        throw new ImageGenerationError('Workers AI returned an unknown image format', 'permanent');
+      }
       return { image, contentType };
     } catch (error) {
+      if (error instanceof ImageGenerationError) throw error;
       if (controller.signal.aborted) {
-        throw new Error(`Workers AI timed out after ${IMAGE_TIMEOUT_MS} ms`);
+        throw new ImageGenerationError(`Workers AI timed out after ${timeoutMs} ms`, 'transient');
       }
-      throw error;
+      // fetch rechaza con TypeError si falla la red (DNS, conexión cortada...).
+      throw new ImageGenerationError(
+        `Workers AI request failed: ${(error as Error).message}`,
+        'transient',
+      );
     } finally {
       clearTimeout(timer);
     }

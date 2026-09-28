@@ -1,32 +1,53 @@
-import { IMAGE_PROMPT_MAX_CHARS } from './story-media.config';
+import {
+  IMAGE_PROMPT_MAX_CHARS,
+  PROMPT_MAX_CHARACTERS,
+  PROMPT_MAX_CHARACTER_CHARS,
+  PROMPT_MAX_SCENE_CHARS,
+} from './story-media.config';
 import { PanelImageInput } from './story-media.types';
 
-/** Mismo estilo en todas las viñetas: es lo que las hace parecer una sola historieta. */
-const STYLE =
-  "Children's comic book panel, colorful cartoon illustration, clean bold outlines, " +
-  'friendly expressive characters, soft lighting.';
+/**
+ * Mismo estilo en todas las viñetas: es lo que las hace parecer una sola
+ * historieta. FLUX no admite prompt negativo, así que el "sin texto" va acá.
+ */
+export const PANEL_STYLE =
+  "Children's comic book panel, wordless illustration, no text, no speech bubbles, " +
+  'colorful cartoon illustration, clean bold outlines, friendly expressive characters, ' +
+  'soft lighting.';
 
 const clean = (value: string) => value.replace(/\s+/g, ' ').trim();
 
+/** Recorta `value` a `max` caracteres (con "…" si se cortó). */
+const cap = (value: string, max: number) =>
+  value.length <= max ? value : `${value.slice(0, max - 1).trimEnd()}…`;
+
 /**
  * Prompt de la imagen de una viñeta: estilo fijo, escenario, fichas de los
- * personajes (para que se vean parecidos en todas) y lo que pasa. Se recorta
- * la acción, que es lo último, si no entra en IMAGE_PROMPT_MAX_CHARS.
+ * personajes (para que se vean parecidos en todas) y lo que pasa.
+ *
+ * Cada parte tiene su tope (escenario, cada ficha y cantidad de personajes),
+ * elegido para que el estilo, el escenario y las fichas siempre entren en
+ * IMAGE_PROMPT_MAX_CHARS: lo único que se recorta para llegar al límite es la
+ * acción, que va al final.
  */
 export function buildPanelImagePrompt({ scene, text, characters }: PanelImageInput): string {
   const cast = characters
-    .map(
-      ({ name, kind, description }) => `${clean(name)} is a ${clean(kind)}: ${clean(description)}`,
+    .slice(0, PROMPT_MAX_CHARACTERS)
+    .map(({ name, kind, description }) =>
+      cap(`${clean(name)} is a ${clean(kind)}: ${clean(description)}`, PROMPT_MAX_CHARACTER_CHARS),
     )
     .join('. ');
-  const head = [STYLE, `Setting: ${clean(scene)}.`, cast && `Characters: ${cast}.`]
+  const head = [
+    PANEL_STYLE,
+    `Setting: ${cap(clean(scene), PROMPT_MAX_SCENE_CHARS)}.`,
+    cast && `Characters: ${cast}.`,
+  ]
     .filter(Boolean)
     .join(' ');
 
   const action = `Action: ${clean(text)}`;
   const room = IMAGE_PROMPT_MAX_CHARS - head.length - 1;
-  if (room <= 'Action: '.length) return head.slice(0, IMAGE_PROMPT_MAX_CHARS);
-  return `${head} ${action.length > room ? action.slice(0, room) : action}`;
+  return `${head} ${action.length > room ? cap(action, room) : action}`;
 }
 
 /**

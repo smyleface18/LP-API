@@ -43,12 +43,12 @@ class InstantMediaWorker {
   @OnEvent(STORY_EVENTS.mediaRequested, { async: true, promisify: true })
   async onMediaRequested({ gameId, panels }: MediaRequestedEvent) {
     for (const { order } of panels) {
-      await this.service.onPanelMedia(gameId, order, {
+      await this.service.onPanelAudio(gameId, order, {
         status: 'ready',
         audioKey: `story/s/panel-${order}.mp3`,
-        imageKey: null,
         speechMarks: [],
       });
+      await this.service.onPanelImage(gameId, order, { imageStatus: 'none', imageKey: null });
     }
   }
 }

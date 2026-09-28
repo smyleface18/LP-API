@@ -220,6 +220,24 @@ export interface PanelMedia {
  */
 export type PanelImageStatus = 'none' | 'pending' | 'ready' | 'failed';
 
+/** Audio de una viñeta (tarea `panel-audio`): con audio la viñeta queda `ready`. */
+export interface PanelAudioResult {
+  status: 'ready' | 'failed';
+  audioKey: string | null;
+  speechMarks: SpeechMark[] | null;
+}
+
+/** Imagen de una viñeta (tarea `panel-image`); llega después del audio. */
+export interface PanelImageResult {
+  imageStatus: Exclude<PanelImageStatus, 'pending'>;
+  imageKey: string | null;
+  /**
+   * El proveedor respondió que se superó la cuota (429): las imágenes que
+   * falten de esta historieta no se piden y quedan `failed`.
+   */
+  rateLimited?: boolean;
+}
+
 /** `imageStatus` de una media, derivado de `imageKey` si es de una partida anterior. */
 export function imageStatusOf(media: PanelMedia | undefined): PanelImageStatus {
   if (!media) return 'none';

@@ -1,18 +1,30 @@
 /** Tiempo máximo de la narración de una viñeta (las dos llamadas a Polly). */
 export const SPEECH_TIMEOUT_MS = 15_000;
 
-/** Tiempo máximo de cada intento de dibujar una viñeta. */
-export const IMAGE_TIMEOUT_MS = 30_000;
+/** Tiempo máximo de cada intento de dibujar una viñeta. Se cambia con `IMAGE_TIMEOUT_MS`. */
+export const DEFAULT_IMAGE_TIMEOUT_MS = 20_000;
 
 /**
- * Esperas entre intentos de dibujar una viñeta (backoff exponencial): 1 intento
- * y un reintento por cada espera. Si fallan todos, la viñeta queda con
- * `imageStatus: 'failed'` y el review sigue con el audio.
+ * Esperas entre intentos de dibujar una viñeta tras un error `transient`
+ * (backoff exponencial): hasta 3 intentos. Si fallan todos, la viñeta queda
+ * con `imageStatus: 'failed'` y el review sigue con el audio.
  */
 export const IMAGE_RETRY_DELAYS_MS = [1_000, 2_000] as const;
 
 /** Largo máximo del prompt de la imagen (FLUX.1 schnell acepta hasta 2048). */
 export const IMAGE_PROMPT_MAX_CHARS = 1024;
+
+/**
+ * Topes de cada parte del prompt. En el peor caso, estilo + escenario + 3
+ * fichas ocupan 911 caracteres: las fichas nunca se cortan y a la acción le
+ * quedan al menos 112 (lo comprueba panel-image-prompt.spec.ts).
+ * Coinciden con los límites del borrador (escenario 200; ficha: nombre 30,
+ * tipo 30, descripción 100; 3 personajes por viñeta), así que con datos
+ * válidos no se recorta nada salvo la acción.
+ */
+export const PROMPT_MAX_SCENE_CHARS = 200;
+export const PROMPT_MAX_CHARACTER_CHARS = 30 + ' is a '.length + 30 + ': '.length + 100;
+export const PROMPT_MAX_CHARACTERS = 3;
 
 /** Modelo de Workers AI por defecto (`CF_IMAGE_MODEL`). */
 export const CF_DEFAULT_IMAGE_MODEL = '@cf/black-forest-labs/flux-1-schnell';

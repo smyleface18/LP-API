@@ -32,15 +32,24 @@ export function storyJobId(job: StoryJob): string {
   return `${job.gameId}__${job.seq}__${job.kind}__${job.dueAt}`;
 }
 
-/** Cola de la media de las viñetas (Fase 4b): una tarea por viñeta. */
+/** Cola de la media de las viñetas: una tarea de audio y una de imagen por viñeta. */
 export const STORY_MEDIA_QUEUE = 'story-media';
 
+export type StoryMediaJobName = 'panel-audio' | 'panel-image';
+
+/** Prioridad en BullMQ (menor = antes): los audios salen antes que las imágenes. */
+export const STORY_MEDIA_JOB_PRIORITY: Record<StoryMediaJobName, number> = {
+  'panel-audio': 1,
+  'panel-image': 2,
+};
+
 /**
- * Viñetas que se generan a la vez en cada instancia. Polly tarda ~1 s y Nova
- * Canvas unos segundos: con 2 la primera viñeta sale rápido sin saturar las cuotas.
+ * Tareas que corren a la vez en cada instancia. Polly tarda ~1 s y una imagen
+ * unos segundos: con 2 la primera viñeta sale rápido sin saturar las cuotas.
  */
 export const STORY_MEDIA_CONCURRENCY = 2;
 
-export function storyMediaJobId(gameId: string, order: number): string {
-  return `${gameId}__media__${order}`;
+export function storyMediaJobId(gameId: string, name: StoryMediaJobName, order: number): string {
+  const kind = name === 'panel-audio' ? 'audio' : 'image';
+  return `${gameId}__${kind}__${order}`;
 }

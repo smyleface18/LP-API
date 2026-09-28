@@ -1,7 +1,7 @@
 import {
   CharacterSheet,
-  PanelImageStatus,
-  PanelMedia,
+  PanelAudioResult,
+  PanelImageResult,
   SpeechMark,
 } from '@/modules/story-game/domain/story-game.types';
 
@@ -43,8 +43,4 @@ export interface PanelMediaRequest {
   languageCode: string;
 }
 
-/** Resultado de generar una viñeta: nunca `pending` (ni `none` en el audio). */
-export type PanelMediaResult = PanelMedia & {
-  status: 'ready' | 'failed';
-  imageStatus: Exclude<PanelImageStatus, 'pending'>;
-};
+export type { PanelAudioResult, PanelImageResult };

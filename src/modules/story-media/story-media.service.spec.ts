@@ -1,7 +1,7 @@
 import { StorageService } from '@/common/src/storage/storage.service';
 import { StoryMediaService } from './story-media.service';
 import { SpeechSynthesizer } from './speech-synthesizer';
-import { ImageGenerator } from './image-generator';
+import { ImageGenerationError, ImageGenerator } from './image-generator';
 import { PanelMediaRequest } from './story-media.types';
 import { seedForGame } from './panel-image-prompt';
 import { IMAGE_RETRY_DELAYS_MS } from './story-media.config';
@@ -17,6 +17,7 @@ const request: PanelMediaRequest = {
 };
 
 const MARKS = [{ time: 0, start: 0, end: 3, value: 'Max' }];
+const PNG = { image: new Uint8Array([2]), contentType: 'image/png' };
 
 describe('StoryMediaService', () => {
   let speech: { synthesize: jest.Mock };
@@ -32,11 +33,7 @@ describe('StoryMediaService', () => {
         speechMarks: MARKS,
       }),
     };
-    images = {
-      generate: jest
-        .fn()
-        .mockResolvedValue({ image: new Uint8Array([2]), contentType: 'image/png' }),
-    };
+    images = { generate: jest.fn().mockResolvedValue(PNG) };
     storage = { putObject: jest.fn().mockResolvedValue(undefined) };
     service = new StoryMediaService(
       speech as unknown as SpeechSynthesizer,
@@ -47,114 +44,131 @@ describe('StoryMediaService', () => {
 
   afterEach(() => jest.useRealTimers());
 
-  it('narrates and draws the panel and uploads both files under the story', async () => {
-    const result = await service.generatePanel(request);
-
-    expect(result).toEqual({
-      status: 'ready',
-      audioKey: 'story/story-1/panel-2.mp3',
-      imageKey: 'story/story-1/panel-2.png',
-      imageStatus: 'ready',
-      speechMarks: MARKS,
+  describe('generateAudio', () => {
+    it('narrates the panel and uploads the audio under the story', async () => {
+      expect(await service.generateAudio(request)).toEqual({
+        status: 'ready',
+        audioKey: 'story/story-1/panel-2.mp3',
+        speechMarks: MARKS,
+      });
+      expect(speech.synthesize).toHaveBeenCalledWith('Max walked home.', 'en-US');
+      expect(storage.putObject).toHaveBeenCalledWith(
+        'story/story-1/panel-2.mp3',
+        expect.any(Uint8Array),
+        'audio/mpeg',
+      );
+      expect(images.generate).not.toHaveBeenCalled();
     });
-    expect(speech.synthesize).toHaveBeenCalledWith('Max walked home.', 'en-US');
-    expect(images.generate).toHaveBeenCalledWith({
-      seed: seedForGame('g1'),
-      scene: 'A street',
-      text: 'Max walked home.',
-      characters: request.characters,
-    });
-    expect(storage.putObject).toHaveBeenCalledWith(
-      'story/story-1/panel-2.mp3',
-      expect.any(Uint8Array),
-      'audio/mpeg',
-    );
-  });
 
-  it('uploads a JPEG image with the .jpg extension', async () => {
-    images.generate.mockResolvedValue({ image: new Uint8Array([2]), contentType: 'image/jpeg' });
-    expect(await service.generatePanel(request)).toMatchObject({
-      imageKey: 'story/story-1/panel-2.jpg',
-      imageStatus: 'ready',
+    it('fails without audio', async () => {
+      speech.synthesize.mockResolvedValue(null);
+      expect(await service.generateAudio(request)).toEqual({
+        status: 'failed',
+        audioKey: null,
+        speechMarks: null,
+      });
     });
-    expect(storage.putObject).toHaveBeenCalledWith(
-      'story/story-1/panel-2.jpg',
-      expect.any(Uint8Array),
-      'image/jpeg',
-    );
-  });
 
-  it('is ready without an image when there is no image provider', async () => {
-    images.generate.mockResolvedValue(null);
-    expect(await service.generatePanel(request)).toMatchObject({
-      status: 'ready',
-      imageKey: null,
-      imageStatus: 'none',
+    it('treats an S3 error as a missing audio', async () => {
+      storage.putObject.mockRejectedValue(new Error('S3 down'));
+      expect(await service.generateAudio(request)).toMatchObject({ status: 'failed' });
     });
   });
 
-  it('retries a failed image with backoff and keeps the image that works', async () => {
-    jest.useFakeTimers();
-    images.generate
-      .mockRejectedValueOnce(new Error('503'))
-      .mockRejectedValueOnce(new Error('timeout'))
-      .mockResolvedValue({ image: new Uint8Array([2]), contentType: 'image/png' });
-
-    const pending = service.generatePanel(request);
-    await jest.advanceTimersByTimeAsync(IMAGE_RETRY_DELAYS_MS[0]);
-    expect(images.generate).toHaveBeenCalledTimes(2);
-    await jest.advanceTimersByTimeAsync(IMAGE_RETRY_DELAYS_MS[1]);
-
-    expect(await pending).toMatchObject({ status: 'ready', imageStatus: 'ready' });
-    expect(images.generate).toHaveBeenCalledTimes(3);
-  });
-
-  it('marks the image failed after every attempt fails, and keeps the audio', async () => {
-    jest.useFakeTimers();
-    images.generate.mockRejectedValue(new Error('Workers AI responded 500'));
-
-    const pending = service.generatePanel(request);
-    await jest.runAllTimersAsync();
-
-    expect(await pending).toEqual({
-      status: 'ready',
-      audioKey: 'story/story-1/panel-2.mp3',
-      imageKey: null,
-      imageStatus: 'failed',
-      speechMarks: MARKS,
+  describe('generateImage', () => {
+    it('draws the panel with the seed of the game and uploads it', async () => {
+      expect(await service.generateImage(request)).toEqual({
+        imageStatus: 'ready',
+        imageKey: 'story/story-1/panel-2.png',
+      });
+      expect(images.generate).toHaveBeenCalledWith({
+        seed: seedForGame('g1'),
+        scene: 'A street',
+        text: 'Max walked home.',
+        characters: request.characters,
+      });
+      expect(speech.synthesize).not.toHaveBeenCalled();
     });
-    expect(images.generate).toHaveBeenCalledTimes(IMAGE_RETRY_DELAYS_MS.length + 1);
-  });
 
-  it('marks the image failed when it cannot be uploaded', async () => {
-    storage.putObject.mockImplementation((key: string) =>
-      key.endsWith('.png') ? Promise.reject(new Error('S3 down')) : Promise.resolve(),
-    );
-    expect(await service.generatePanel(request)).toMatchObject({
-      status: 'ready',
-      imageKey: null,
-      imageStatus: 'failed',
+    it('uploads a JPEG image with the .jpg extension', async () => {
+      images.generate.mockResolvedValue({ image: new Uint8Array([2]), contentType: 'image/jpeg' });
+      expect(await service.generateImage(request)).toEqual({
+        imageStatus: 'ready',
+        imageKey: 'story/story-1/panel-2.jpg',
+      });
     });
-  });
 
-  it('fails without audio but keeps the image', async () => {
-    speech.synthesize.mockResolvedValue(null);
-    expect(await service.generatePanel(request)).toEqual({
-      status: 'failed',
-      audioKey: null,
-      imageKey: 'story/story-1/panel-2.png',
-      imageStatus: 'ready',
-      speechMarks: null,
+    it('is none when there is no image provider', async () => {
+      images.generate.mockResolvedValue(null);
+      expect(await service.generateImage(request)).toEqual({ imageStatus: 'none', imageKey: null });
     });
-  });
 
-  it('treats an S3 error as a missing file', async () => {
-    storage.putObject.mockImplementation((key: string) =>
-      key.endsWith('.mp3') ? Promise.reject(new Error('S3 down')) : Promise.resolve(),
-    );
-    expect(await service.generatePanel(request)).toMatchObject({
-      status: 'failed',
-      audioKey: null,
+    it('is failed when the image cannot be uploaded', async () => {
+      storage.putObject.mockRejectedValue(new Error('S3 down'));
+      expect(await service.generateImage(request)).toEqual({
+        imageStatus: 'failed',
+        imageKey: null,
+      });
+    });
+
+    it('retries a transient error with backoff and keeps the image that works', async () => {
+      jest.useFakeTimers();
+      images.generate
+        .mockRejectedValueOnce(new ImageGenerationError('503', 'transient'))
+        .mockRejectedValueOnce(new ImageGenerationError('timed out', 'transient'))
+        .mockResolvedValue(PNG);
+
+      const pending = service.generateImage(request);
+      await jest.advanceTimersByTimeAsync(IMAGE_RETRY_DELAYS_MS[0] - 1);
+      expect(images.generate).toHaveBeenCalledTimes(1);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(images.generate).toHaveBeenCalledTimes(2);
+      await jest.advanceTimersByTimeAsync(IMAGE_RETRY_DELAYS_MS[1]);
+
+      expect(await pending).toMatchObject({ imageStatus: 'ready' });
+      expect(images.generate).toHaveBeenCalledTimes(3);
+    });
+
+    it('gives up after 3 attempts on transient errors', async () => {
+      jest.useFakeTimers();
+      images.generate.mockRejectedValue(new ImageGenerationError('500', 'transient'));
+
+      const pending = service.generateImage(request);
+      await jest.runAllTimersAsync();
+
+      expect(await pending).toEqual({ imageStatus: 'failed', imageKey: null, rateLimited: false });
+      expect(images.generate).toHaveBeenCalledTimes(3);
+    });
+
+    it('treats an unknown error as transient', async () => {
+      jest.useFakeTimers();
+      images.generate.mockRejectedValueOnce(new Error('bug')).mockResolvedValue(PNG);
+
+      const pending = service.generateImage(request);
+      await jest.runAllTimersAsync();
+
+      expect(await pending).toMatchObject({ imageStatus: 'ready' });
+      expect(images.generate).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not retry a permanent error (400, 401, 403)', async () => {
+      images.generate.mockRejectedValue(new ImageGenerationError('401', 'permanent'));
+      expect(await service.generateImage(request)).toEqual({
+        imageStatus: 'failed',
+        imageKey: null,
+        rateLimited: false,
+      });
+      expect(images.generate).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not retry a 429 and reports it so the rest of the story skips the provider', async () => {
+      images.generate.mockRejectedValue(new ImageGenerationError('429', 'rate-limited'));
+      expect(await service.generateImage(request)).toEqual({
+        imageStatus: 'failed',
+        imageKey: null,
+        rateLimited: true,
+      });
+      expect(images.generate).toHaveBeenCalledTimes(1);
     });
   });
 });

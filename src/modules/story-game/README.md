@@ -29,7 +29,7 @@ LOBBY → PLAYING → PROCESSING → REVIEW → FINISHED
 LOBBY/PLAYING → ABANDONED (nadie conectado durante 60 s, o ya nadie puede volver)
 ```
 
-PROCESSING y REVIEW nunca se abandonan: la historieta se termina de generar y se guarda en el historial aunque todos se hayan ido. PROCESSING dura hasta que la primera viñeta tiene su media, y REVIEW hasta que la tienen todas (ver Fin de la partida).
+PROCESSING y REVIEW nunca se abandonan: la historieta se termina de generar y se guarda en el historial aunque todos se hayan ido. PROCESSING dura hasta que la primera viñeta tiene su audio, y REVIEW hasta que no queda audio ni imagen pendiente (ver Fin de la partida).
 
 Solo el servidor cambia el estado. Un evento que no corresponde al estado actual devuelve `INVALID_STATE`.
 
@@ -74,7 +74,7 @@ Mismo patrón que la trivia (`GameTimeoutQueue`): el servicio emite `story.sched
 | -------------- | ------------ | ----------------------------------------------------------- | ------------------------------------------------ |
 | `abandon-idle` | `abandonSeq` | LOBBY/PLAYING, mismo `abandonSeq`, nadie conectado          | Pasa a ABANDONED.                                |
 | `close-turn`   | viñeta       | PLAYING, `currentPanel = seq`, `turnCloseAt = dueAt`, abierta | Cierra el turno por tiempo (confirma o rellena), o lo difiere si hay una revisión en curso. |
-| `media-deadline` | 0          | PROCESSING/REVIEW, `mediaDeadlineAt = dueAt`                | Las viñetas que sigan `pending` quedan `failed` y la partida avanza a REVIEW/FINISHED. |
+| `media-deadline` | 0          | PROCESSING/REVIEW, `mediaDeadlineAt = dueAt`                | El audio o la imagen que sigan `pending` quedan `failed` (un audio ya generado se conserva) y la partida avanza a REVIEW/FINISHED. |
 
 `turnEndsAt` es el fin del turno que ven los clientes. `turnCloseAt` es cuándo corre `close-turn`: normalmente es igual, salvo cuando el turno vence con una revisión en curso (ver Turnos, punto 4).
 
@@ -135,12 +135,12 @@ Jugadores que se van durante PLAYING:
 Al cerrarse la última viñeta (o al quedar menos de 2 jugadores), la partida pasa a PROCESSING y el servicio emite el evento interno `story.processing-started`. `StoryGameService.onProcessingStarted` (`@OnEvent`) es el **único punto** de la generación:
 
 1. `requestMedia`: asigna el `storyId` (un UUID: es el id del historial en Postgres), marca cada viñeta confirmada como `pending` (o `none` si venció sin texto), fija `mediaDeadlineAt = ahora + MEDIA_DEADLINE_MS` (3 min) y emite `story.media-requested`. Idempotente: si ya hay `storyId`, no hace nada.
-2. `StoryMediaQueue` crea una tarea por viñeta en la cola `story-media` (id fijo `{gameId}__media__{order}`, la primera viñeta primero). `StoryMediaProcessor` (concurrencia `STORY_MEDIA_CONCURRENCY` = 2) llama a `StoryMediaService.generatePanel` y le pasa el resultado a `onPanelMedia`.
-3. `onPanelMedia` guarda la media de la viñeta solo si sigue `pending` (el primer resultado gana) y emite `story.panel-media-ready` y el avance (`story.processing`).
+2. `StoryMediaQueue` crea dos tareas por viñeta en la cola `story-media`: `panel-audio` (id fijo `{gameId}__audio__{order}`) y `panel-image` (`{gameId}__image__{order}`). Los audios tienen prioridad (`STORY_MEDIA_JOB_PRIORITY`): salen todos antes que las imágenes, así una imagen lenta o con reintentos nunca demora el audio de otra viñeta. Dentro de cada tipo, la primera viñeta sale primero. `StoryMediaProcessor` (concurrencia `STORY_MEDIA_CONCURRENCY` = 2) llama a `StoryMediaService.generateAudio` o `generateImage` y le pasa el resultado a `onPanelAudio` u `onPanelImage`. Antes de dibujar pregunta `isImagePending`: si la imagen ya no está pendiente (venció el plazo o hubo un 429), no llama al proveedor.
+3. `onPanelAudio` guarda el audio solo si sigue `pending` (el primer resultado gana): con audio la viñeta queda `ready` aunque su imagen siga pendiente. `onPanelImage` guarda la imagen solo si su `imageStatus` sigue `pending`; si el resultado viene con `rateLimited` (el proveedor respondió 429), las demás imágenes pendientes de la historieta quedan `failed` sin llamar al proveedor. Cada cambio emite `story.panel-media-ready` (la imagen llega en un segundo `panelMediaReady`) y el avance (`story.processing`, que cuenta los audios).
 4. `advanceAfterMedia`, después de cada resultado:
-   - PROCESSING → REVIEW (`enterReview`) cuando la **primera** viñeta ya no está pendiente. Emite `lobbyUpdated` y `storyReviewReady` con el manifiesto a la sala, y libera `user:{userId}:story` de todos los jugadores (solo si todavía apunta a esta partida). Desde ahí pueden crear o unirse a otra partida sin `ALREADY_IN_GAME`. Las viñetas que faltan le llegan a la sala por `panelMediaReady`.
-   - REVIEW → FINISHED (`finishStory`) cuando **ninguna** está pendiente. TTL de 24 h y evento `story.finished`, con el que `StoryHistoryService` la guarda en Postgres (Fase 4c).
-5. Si vence el plazo (`media-deadline`), lo pendiente queda `failed` y la partida avanza igual: una cola caída, una tarea perdida o AWS sin responder nunca dejan una partida en PROCESSING.
+   - PROCESSING → REVIEW (`enterReview`) cuando el **audio** de la primera viñeta ya no está pendiente. Emite `lobbyUpdated` y `storyReviewReady` con el manifiesto a la sala, y libera `user:{userId}:story` de todos los jugadores (solo si todavía apunta a esta partida). Desde ahí pueden crear o unirse a otra partida sin `ALREADY_IN_GAME`. Las viñetas que faltan le llegan a la sala por `panelMediaReady`.
+   - REVIEW → FINISHED (`finishStory`) cuando no queda **nada** pendiente, ni audio ni imagen. TTL de 24 h y evento `story.finished`, con el que `StoryHistoryService` la guarda en Postgres (Fase 4c).
+5. Si vence el plazo (`media-deadline`), el audio o la imagen que sigan pendientes quedan `failed` y la partida avanza igual; un audio ya generado nunca se descarta: una cola caída, una tarea perdida o AWS sin responder nunca dejan una partida en PROCESSING.
 
 Una viñeta es `ready` si tiene audio y `failed` si no. La imagen va aparte, en `media.imageStatus` (`none` sin proveedor de imágenes o sin texto, `pending`, `ready` o `failed` si el proveedor falló en todos los intentos o venció el plazo); sin imagen, la viñeta se lee igual. Sin ninguna viñeta con texto no se pide nada y la partida pasa directo a FINISHED. Las transiciones son idempotentes (solo actúan desde el estado anterior).
 

@@ -162,8 +162,8 @@ export function createStoryHarness(start = 1_800_000_000_000) {
 
   /**
    * Hace lo que harían la cola `story-media` y su processor: cada viñeta
-   * pedida en `mediaRequested` que siga `pending` recibe `media(order)` (por
-   * defecto, audio listo sin imagen). `orders` limita a esas viñetas.
+   * pedida en `mediaRequested` que siga `pending` recibe el audio y después la
+   * imagen de `media(order)` (por defecto, audio listo sin imagen). `orders` limita a esas viñetas.
    */
   async function completeMedia(
     media: (order: number) => PanelMedia = (order) => ({
@@ -181,7 +181,16 @@ export function createStoryHarness(start = 1_800_000_000_000) {
     for (const { gameId, panels } of requested) {
       for (const { order } of panels) {
         if (orders && !orders.includes(order)) continue;
-        await service.onPanelMedia(gameId, order, media(order));
+        const { status, audioKey, imageKey, imageStatus, speechMarks } = media(order);
+        await service.onPanelAudio(gameId, order, {
+          status: status === 'failed' ? 'failed' : 'ready',
+          audioKey,
+          speechMarks,
+        });
+        await service.onPanelImage(gameId, order, {
+          imageStatus: imageStatus === 'ready' || imageStatus === 'failed' ? imageStatus : 'none',
+          imageKey,
+        });
       }
     }
   }
