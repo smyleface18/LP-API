@@ -2,11 +2,13 @@ import { Injectable } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { Game, GameSession, PlayerAnswer, User } from '@/db/entities';
 import { Match } from './domain/match.entity';
+import { determineWinners } from './domain/match-outcome';
 
 /**
  * Guarda en Postgres el resultado de una partida terminada: un Game con sus
  * preguntas, una GameSession por jugador (score y posición), sus
- * PlayerAnswer, y suma el score de la partida al score total del User.
+ * PlayerAnswer, y actualiza las métricas del User: score total, partidas
+ * jugadas/ganadas y racha actual.
  * Todo en una transacción para no dejar resultados a medias.
  */
 @Injectable()
@@ -18,6 +20,7 @@ export class MatchResultsService {
     const players = match.getPlayersWithInfo();
     const answers = match.getAnswers();
     const positions = this.rankPositions(players.map((p) => p.matchScore));
+    const winners = determineWinners(match);
 
     return this.dataSource.transaction(async (manager) => {
       const game = await manager.save(
@@ -52,9 +55,22 @@ export class MatchResultsService {
           );
         if (playerAnswers.length > 0) await manager.save(playerAnswers);
 
-        if (player.matchScore > 0) {
-          await manager.increment(User, { id: player.userId }, 'score', player.matchScore);
-        }
+        // Todo en un UPDATE atómico sobre los valores actuales de la fila (no
+        // leer-modificar-escribir): dos partidas del mismo usuario que terminan
+        // a la vez no se pisan. Los valores son enteros calculados por nosotros.
+        const won = winners.has(player.userId);
+        const points = Math.trunc(player.matchScore);
+        await manager
+          .createQueryBuilder()
+          .update(User)
+          .set({
+            score: () => `"score" + ${points}`,
+            gamesPlayed: () => `"gamesPlayed" + 1`,
+            gamesWon: () => `"gamesWon" + ${won ? 1 : 0}`,
+            currentStreak: () => (won ? `"currentStreak" + 1` : '0'),
+          })
+          .where('id = :id', { id: player.userId })
+          .execute();
         const user = await manager.findOne(User, {
           where: { id: player.userId },
           select: { id: true, score: true },

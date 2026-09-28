@@ -102,6 +102,10 @@ export class Match {
     }
   }
 
+  hasLeft(userId: string): boolean {
+    return this.leftPlayers.has(userId);
+  }
+
   /** Salida explícita de la sala: no vuelve a menos que se una de nuevo. */
   leave(userId: string) {
     this.disconnectPlayer(userId);
@@ -439,10 +443,15 @@ export class Match {
     }
 
     // Crear instancia
+    // Antes el modo no se restauraba y todo match volvía como MULTIPLAYER.
+    const mode = Object.values(ModeMatch).includes(snapshot.mode as ModeMatch)
+      ? (snapshot.mode as ModeMatch)
+      : ModeMatch.MULTIPLAYER;
+
     const match = new Match(
       snapshot.roomId,
       snapshot.difficulty as Level,
-      ModeMatch.MULTIPLAYER,
+      mode,
       snapshot.questions as Question[],
       snapshot.owner as User,
     );

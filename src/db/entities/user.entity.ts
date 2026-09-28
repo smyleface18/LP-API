@@ -32,6 +32,21 @@ export class User extends CoreEntity {
   })
   score!: number;
 
+  // Métricas del dashboard; las actualiza MatchResultsService al terminar cada
+  // partida (ver determineWinners para qué cuenta como ganada).
+  @IsNumber()
+  @Column({ type: 'int', default: 0 })
+  gamesPlayed!: number;
+
+  @IsNumber()
+  @Column({ type: 'int', default: 0 })
+  gamesWon!: number;
+
+  /** Partidas ganadas seguidas; vuelve a 0 al perder una. */
+  @IsNumber()
+  @Column({ type: 'int', default: 0 })
+  currentStreak!: number;
+
   @IsEnum(UserRoles)
   @Column({
     type: 'enum',
