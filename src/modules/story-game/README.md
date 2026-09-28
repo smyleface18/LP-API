@@ -198,6 +198,7 @@ Los errores van por el ack si el cliente lo envió; si no, por `storyError`: `{ 
 | `getGameState`      | cliente → servidor  | Ack: `GameStateView` (estado completo para ese jugador).                                 |
 | `getReviewManifest` | cliente → servidor  | `{ gameId }`. REVIEW o FINISHED, participantes. Ack: manifiesto.                          |
 | `leaveGame`         | cliente → servidor  | Sin payload.                                                                             |
+| `timeSync`          | cliente → servidor  | Sin payload. Ack: `{ serverTime }` para estimar el offset del reloj (`endsAt` está en hora del servidor). |
 | `getStoryRules`     | cliente → servidor  | Sin payload. Ack: `StoryRulesView` (ver Reglas para el cliente).                         |
 | `lobbyUpdated`      | servidor → sala     | `{ gameId, status, hostId, config, players: [{ userId, username, avatarUrl, connected, left }] }` |
 | `turnStarted`       | servidor → sala     | `{ panelOrder, authorId, endsAt, storySoFar, cast }`                                     |

@@ -339,6 +339,11 @@ describe('StoryGameGateway', () => {
     expect(io.emitted.map(([, event]) => event)).toEqual(['authorStatus']);
   });
 
+  it('answers timeSync with the server time', () => {
+    jest.spyOn(Date, 'now').mockReturnValueOnce(1234);
+    expect(gateway.handleTimeSync()).toEqual({ serverTime: 1234 });
+  });
+
   it('serves the rules the client needs to build its forms', () => {
     const { data } = gateway.handleGetRules();
     expect(data?.reactions).toEqual(STORY_REACTIONS);

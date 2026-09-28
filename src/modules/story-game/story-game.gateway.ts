@@ -277,6 +277,15 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
     return { ok: true, data: null, message: 'left the game' };
   }
 
+  /**
+   * Hora del servidor para que el cliente estime su offset con el RTT (igual
+   * que `timeSync` de /game): `turnStarted.endsAt` está en hora del servidor.
+   */
+  @SubscribeMessage('timeSync')
+  handleTimeSync() {
+    return { serverTime: Date.now() };
+  }
+
   /** Rangos de la configuración, límites del borrador y reacciones permitidas. */
   @SubscribeMessage('getStoryRules')
   handleGetRules(): ApiResponse<StoryRulesView> {
