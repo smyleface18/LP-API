@@ -257,12 +257,17 @@ function serializeGame(game: StoryGame): HashOps {
   };
   if (game.storyId === null) ops.del.push('storyId');
   else ops.set.push(['storyId', game.storyId]);
+  if (game.title === null) ops.del.push('title');
+  else ops.set.push(['title', game.title]);
+  if (game.titlePending) ops.set.push(['titlePending', '1']);
+  else ops.del.push('titlePending');
   for (const field of [
     'currentPanel',
     'turnEndsAt',
     'turnCloseAt',
     'abandonAt',
     'mediaDeadlineAt',
+    'reviewAt',
   ] as const) {
     const value = game[field];
     if (value === null) ops.del.push(field);
@@ -286,5 +291,9 @@ function deserializeGame(gameId: string, raw: Record<string, string>): StoryGame
     createdAt: Number(raw.createdAt),
     storyId: raw.storyId ?? null,
     mediaDeadlineAt: raw.mediaDeadlineAt === undefined ? null : Number(raw.mediaDeadlineAt),
+    // Partidas de antes del título y la espera del review no tienen estos campos.
+    reviewAt: raw.reviewAt === undefined ? null : Number(raw.reviewAt),
+    title: raw.title ?? null,
+    titlePending: raw.titlePending === '1',
   };
 }

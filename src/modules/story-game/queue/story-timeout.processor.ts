@@ -26,6 +26,9 @@ export class StoryTimeoutProcessor extends WorkerHost {
       case 'media-deadline':
         await this.storyGameService.expireMedia(gameId, dueAt);
         return;
+      case 'review-wait':
+        await this.storyGameService.endReviewWait(gameId, dueAt);
+        return;
       default:
         this.logger.warn(`unknown job: ${job.name}`);
     }

@@ -10,7 +10,10 @@ Revisa el inglés de los borradores del modo Historieta (texto de la viñeta y f
 | `language-review.service.ts`           | `LanguageReviewService`: implementación con Bedrock (la que usa la app).                  |
 | `review-response.parser.ts`            | Valida la respuesta del modelo contra el esquema de `LanguageReview`.                      |
 | `prompts/review-system-prompt.v1.ts`   | Prompt de sistema, versionado.                                                             |
-| `language-review.config.ts`            | `REVIEW_TIMEOUT_MS` (8 s), compartido con los turnos del juego.                            |
+| `language-review.config.ts`            | `REVIEW_TIMEOUT_MS` (8 s), compartido con los turnos del juego; `STORY_TITLE_TIMEOUT_MS` (8 s) y `STORY_TITLE_MAX_CHARS` (60). |
+| `story-titler.ts`                      | `StoryTitler`: clase abstracta y token del título de una historieta (+ `NoStoryTitler`).   |
+| `bedrock-story-titler.ts`              | `BedrockStoryTitler`: el título con el mismo modelo (`BEDROCK_REVIEW_MODEL_ID`); `cleanStoryTitle` limpia la respuesta. |
+| `prompts/story-title-prompt.v1.ts`     | Prompt de sistema del título, versionado.                                                  |
 
 ## Comportamiento
 
@@ -32,6 +35,14 @@ Qué se hace con el resultado (en `story-game`):
 - `flagged: true`: el borrador se rechaza sin consumir intento.
 - Al confirmar: `finalText` = `correctedText` de la última revisión (o el original si no hubo revisión). Las fichas nuevas entran al elenco con las `characterCorrections` aplicadas, salvo el nombre. Polly narra `finalText` (Fase 4).
 - El puntaje lo calcula el servidor con la cantidad de correcciones (`calculatePanelScore`); nunca con un puntaje del modelo.
+
+## Título de la historieta
+
+Al terminar una historieta (PROCESSING), `StoryGameService` le pide un título a `StoryTitler` con el texto final de cada viñeta y los nombres del elenco. `BedrockStoryTitler` usa el mismo modelo que la revisión, en una sola llamada con `STORY_TITLE_TIMEOUT_MS`:
+
+- El JSON de la historieta va como dato: el prompt le pide al modelo que no siga instrucciones que vengan adentro.
+- Título en inglés, de 2 a 6 palabras, apto para chicos. `cleanStoryTitle` toma la primera línea, quita prefijos (`Title:`), comillas, markdown y el punto final, y corta en `STORY_TITLE_MAX_CHARS` (60) en la última palabra que entra.
+- Nunca lanza: sin modelo, con error o con una respuesta vacía devuelve null y la historieta se guarda sin título.
 
 ## Prompt versionado
 
@@ -55,3 +66,4 @@ Credenciales: la cadena estándar del SDK de AWS (variables `AWS_ACCESS_KEY_ID`/
 
 - `language-review.service.spec.ts`: Bedrock mockeado. Respuesta válida, parámetros de la llamada, JSON inválido con reintento, fallo, timeout (también con el reintento dentro del presupuesto) y sin model ID.
 - `review-response.parser.spec.ts`: esquema y filtros de la respuesta.
+- `bedrock-story-titler.spec.ts`: limpieza del título, la llamada a Bedrock (modelo, prompt y la historieta como dato) y los casos sin título.

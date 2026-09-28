@@ -41,6 +41,7 @@ export function toStoryRecords(snapshot: StorySnapshot, finishedAt: Date): Story
     story: {
       id: storyId,
       gameId: game.gameId,
+      title: game.title,
       level: game.config.level as Level,
       language: game.config.language,
       panelsCount: game.config.panelsCount,
@@ -96,6 +97,7 @@ export function toStoryManifest(
   return {
     storyId: story.id,
     gameId: story.gameId,
+    title: story.title ?? null,
     characters: story.characters,
     ranking: [...story.participants].sort(byPosition).map((participant) => ({
       userId: participant.userId,
@@ -137,6 +139,7 @@ export function toHistoryItem(
   const [firstPanel] = [...story.panels].sort(byOrder);
   return {
     storyId: story.id,
+    title: story.title ?? null,
     finishedAt: story.finishedAt.toISOString(),
     level: story.level,
     panelsCount: story.panels.length,

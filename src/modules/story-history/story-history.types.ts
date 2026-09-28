@@ -3,6 +3,8 @@ import { Level } from '@/db/enum/question.enum';
 /** Una historieta en el historial del jugador (`GET /story/history`). */
 export interface StoryHistoryItem {
   storyId: string;
+  /** Título que puso la IA; null en historietas sin título. */
+  title: string | null;
   /** ISO 8601. */
   finishedAt: string;
   level: Level;

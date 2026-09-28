@@ -11,6 +11,7 @@ import {
   LanguageReviewer,
   NoErrorsLanguageReviewer,
 } from '@/modules/language-review/language-reviewer';
+import { NoStoryTitler, StoryTitler } from '@/modules/language-review/story-titler';
 import { StoryGameGateway } from './story-game.gateway';
 import { StoryGameService } from './story-game.service';
 import { StoryUrlSigner } from './story-url-signer.service';
@@ -71,6 +72,7 @@ describe('Timer-driven events reach the room', () => {
         InstantMediaWorker,
         { provide: StoryStateRepository, useValue: new InMemoryStoryStore() },
         { provide: LanguageReviewer, useClass: NoErrorsLanguageReviewer },
+        { provide: StoryTitler, useClass: NoStoryTitler },
         { provide: WsAuthService, useValue: {} },
         {
           provide: StoryUrlSigner,

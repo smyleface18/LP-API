@@ -28,6 +28,10 @@ export class Story extends CoreEntity {
   @Column({ unique: true })
   gameId!: string;
 
+  /** Título que puso la IA al terminar; null si no hubo (IA caída o historieta vieja). */
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  title!: string | null;
+
   @IsEnum(Level)
   @Column({ type: 'enum', enum: Level })
   level!: Level;

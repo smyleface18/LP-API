@@ -5,7 +5,7 @@ export const STORY_SCHEDULE_EVENT = 'story.schedule';
 /** Borrar una tarea que quedó obsoleta. Solo limpieza: la tarea igual se descarta sola por `seq`. */
 export const STORY_CANCEL_EVENT = 'story.cancel';
 
-export type StoryJobKind = 'abandon-idle' | 'close-turn' | 'media-deadline';
+export type StoryJobKind = 'abandon-idle' | 'close-turn' | 'media-deadline' | 'review-wait';
 
 /**
  * Paso programado de una partida de Historieta (mismo patrón que GameJob de la
@@ -19,6 +19,8 @@ export type StoryJobKind = 'abandon-idle' | 'close-turn' | 'media-deadline';
  *   se reasignó (su autor abandonó), el turno nuevo tiene otro dueAt.
  * - media-deadline: seq = 0; dueAt = `mediaDeadlineAt`. Las viñetas que sigan
  *   `pending` pasan a `failed` y la partida avanza a REVIEW/FINISHED.
+ * - review-wait: seq = 0; dueAt = `reviewAt`. Venció la espera de PROCESSING:
+ *   el review empieza aunque falten imágenes o el título.
  */
 export interface StoryJob {
   gameId: string;

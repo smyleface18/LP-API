@@ -63,6 +63,14 @@ export const SIGNED_URL_MIN_REMAINING_MS = 30 * 60 * 1000;
  */
 export const MEDIA_DEADLINE_MS = 3 * 60_000;
 
+/**
+ * Cuánto espera PROCESSING, desde que se pide la media, a que estén todos los
+ * audios, las imágenes y el título, para que el review aparezca completo. Si
+ * no llegan, el review empieza igual (con el audio de la primera viñeta) y lo
+ * que falte llega después por `panelMediaReady`.
+ */
+export const REVIEW_MAX_WAIT_MS = 30_000;
+
 /** Revisiones de IA que puede usar un jugador en su viñeta. */
 export const MAX_REVIEW_ATTEMPTS = 2;
 export const MAX_CHARS_PER_PANEL = 320;

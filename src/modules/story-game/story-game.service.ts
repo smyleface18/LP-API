@@ -6,6 +6,7 @@ import { Repository } from 'typeorm';
 import { User } from '@/db/entities';
 import { UniqueNamesAdapter } from '@/common/src/unique-names/unique-names.adapter';
 import { LanguageReviewer } from '@/modules/language-review/language-reviewer';
+import { StoryTitler } from '@/modules/language-review/story-titler';
 import {
   LanguageReview,
   LanguageReviewInput,
@@ -52,6 +53,7 @@ import {
   FINISHED_STORY_TTL_MS,
   IDLE_ABANDON_DELAY_MS,
   MEDIA_DEADLINE_MS,
+  REVIEW_MAX_WAIT_MS,
   MAX_DRAFTS_PER_TURN,
   MAX_REVIEW_ATTEMPTS,
   REVIEW_CLOSE_GRACE_MS,
@@ -78,6 +80,10 @@ type Mutation = (snapshot: StorySnapshot, outbox: StoryOutboxItem[]) => StoryCha
 const hasPendingMedia = (panel: PanelState) =>
   panel.media?.status === 'pending' || panel.media?.imageStatus === 'pending';
 
+/** Falta algo de la historieta terminada: audio o imagen de alguna viñeta, o el título. */
+const hasPendingWork = (snapshot: StorySnapshot) =>
+  snapshot.game.titlePending || closedPanels(snapshot).some(hasPendingMedia);
+
 @Injectable()
 export class StoryGameService {
   private readonly logger = new Logger(StoryGameService.name);
@@ -90,6 +96,7 @@ export class StoryGameService {
     private readonly eventEmitter: EventEmitter2,
     private readonly reviewer: LanguageReviewer,
     private readonly urls: StoryUrlSigner,
+    private readonly titler: StoryTitler,
   ) {}
 
   async createGame(userId: string): Promise<StorySnapshot> {
@@ -123,6 +130,9 @@ export class StoryGameService {
         createdAt: now,
         storyId: null,
         mediaDeadlineAt: null,
+        reviewAt: null,
+        title: null,
+        titlePending: false,
       };
 
       // create() no pisa una partida existente con el mismo id.
@@ -460,15 +470,16 @@ export class StoryGameService {
 
   /**
    * Punto único de la generación de la historieta: corre al entrar a PROCESSING.
-   * Pide la media de cada viñeta (cola `story-media`). REVIEW llega cuando la
-   * primera viñeta tiene su media y FINISHED cuando la tienen todas (o vence
+   * Pide la media de cada viñeta (cola `story-media`) y el título (en paralelo).
+   * REVIEW llega cuando está todo, o al vencer REVIEW_MAX_WAIT_MS si la primera
+   * viñeta ya tiene audio; FINISHED cuando no falta nada (o vence
    * MEDIA_DEADLINE_MS). Sin nada que generar, pasa de largo a FINISHED.
    */
   @OnEvent(STORY_EVENTS.processingStarted, { async: true, promisify: true })
   async onProcessingStarted({ gameId }: ProcessingStartedEvent): Promise<void> {
     try {
       await this.requestMedia(gameId);
-      await this.advanceAfterMedia(gameId);
+      await Promise.all([this.generateTitle(gameId), this.advanceAfterMedia(gameId)]);
     } catch (error) {
       this.logger.error(`story ${gameId}: processing failed: ${(error as Error).message}`);
     }
@@ -513,7 +524,10 @@ export class StoryGameService {
       }
 
       if (requests.length > 0) {
-        game.mediaDeadlineAt = Date.now() + MEDIA_DEADLINE_MS;
+        const now = Date.now();
+        game.mediaDeadlineAt = now + MEDIA_DEADLINE_MS;
+        game.reviewAt = now + REVIEW_MAX_WAIT_MS;
+        game.titlePending = true;
         outbox.push({ event: STORY_EVENTS.mediaRequested, payload: { gameId, panels: requests } });
       }
       outbox.push({
@@ -522,6 +536,46 @@ export class StoryGameService {
       });
       return { game, setPanels: panels };
     });
+  }
+
+  /**
+   * Pide el título a la IA con el texto final de cada viñeta y lo guarda. Sin
+   * título (IA caída o respuesta vacía) la historieta sigue sin él.
+   */
+  async generateTitle(gameId: string): Promise<void> {
+    const snapshot = await this.getSnapshot(gameId);
+    if (!snapshot.game.titlePending) return;
+
+    const title = await this.titler.title({
+      panels: closedPanels(snapshot)
+        .filter((panel) => !!panel.originalText)
+        .map((panel) => panel.finalText ?? ''),
+      characters: castOf(snapshot).map((character) => character.name),
+    });
+
+    await this.mutate(gameId, (snapshot) => {
+      const { game } = snapshot;
+      if (!game.titlePending) return null;
+      game.title = title;
+      game.titlePending = false;
+      if (!hasPendingWork(snapshot)) game.mediaDeadlineAt = null;
+      return { game };
+    });
+    await this.advanceAfterMedia(gameId);
+  }
+
+  /**
+   * Tarea `review-wait`: venció la espera de PROCESSING. El review empieza en
+   * cuanto la primera viñeta tenga audio, aunque falten imágenes o el título.
+   */
+  async endReviewWait(gameId: string, dueAt: number): Promise<void> {
+    await this.mutate(gameId, (snapshot) => {
+      const { game } = snapshot;
+      if (game.status !== StoryStatus.PROCESSING || game.reviewAt !== dueAt) return null;
+      game.reviewAt = null;
+      return { game };
+    });
+    await this.advanceAfterMedia(gameId);
   }
 
   /**
@@ -606,6 +660,8 @@ export class StoryGameService {
         };
       }
       this.logger.warn(`story ${gameId}: media deadline expired (${expired.length} pending)`);
+      // Un título que no llegó tampoco frena la historieta.
+      snapshot.game.titlePending = false;
       this.afterMediaSettled(snapshot, expired, outbox);
       snapshot.game.mediaDeadlineAt = null;
       return { game: snapshot.game, setPanels: expired };
@@ -614,8 +670,9 @@ export class StoryGameService {
   }
 
   /**
-   * Eventos de las viñetas que cambiaron; sin nada pendiente (audio ni imagen)
-   * se quita el plazo. El avance de PROCESSING cuenta los audios.
+   * Eventos de las viñetas que cambiaron; sin nada pendiente (audio, imagen ni
+   * título) se quita el plazo. El avance de PROCESSING cuenta las viñetas con
+   * audio e imagen terminados.
    */
   private afterMediaSettled(
     snapshot: StorySnapshot,
@@ -630,8 +687,9 @@ export class StoryGameService {
       });
     }
     const withMedia = closedPanels(snapshot).filter((p) => p.media && p.media.status !== 'none');
-    const done = withMedia.filter((p) => p.media!.status !== 'pending').length;
-    if (!closedPanels(snapshot).some(hasPendingMedia)) game.mediaDeadlineAt = null;
+    // Una viñeta cuenta como lista cuando no le falta ni el audio ni la imagen.
+    const done = withMedia.filter((p) => !hasPendingMedia(p)).length;
+    if (!hasPendingWork(snapshot)) game.mediaDeadlineAt = null;
     if (game.status === StoryStatus.PROCESSING) {
       outbox.push({
         event: STORY_EVENTS.processing,
@@ -641,21 +699,24 @@ export class StoryGameService {
   }
 
   /**
-   * PROCESSING -> REVIEW cuando la primera viñeta tiene su audio (o falló), y
-   * REVIEW -> FINISHED cuando no queda nada pendiente, ni audio ni imagen. Una
-   * viñeta sin `media` (partida de antes de la Fase 4b) cuenta como terminada.
+   * PROCESSING -> REVIEW cuando no falta nada (audios, imágenes y título), o
+   * cuando venció la espera (`reviewAt`) y la primera viñeta ya tiene su audio
+   * (o falló). REVIEW -> FINISHED cuando no falta nada. Una viñeta sin `media`
+   * (partida de antes de la Fase 4b) cuenta como terminada.
    */
   private async advanceAfterMedia(gameId: string): Promise<void> {
     let snapshot = await this.getSnapshot(gameId);
     const [first] = closedPanels(snapshot);
-    if (snapshot.game.status === StoryStatus.PROCESSING && first?.media?.status !== 'pending') {
+    const waitOver = snapshot.game.reviewAt === null || !hasPendingWork(snapshot);
+    if (
+      snapshot.game.status === StoryStatus.PROCESSING &&
+      first?.media?.status !== 'pending' &&
+      waitOver
+    ) {
       await this.enterReview(gameId);
       snapshot = await this.getSnapshot(gameId);
     }
-    if (
-      snapshot.game.status === StoryStatus.REVIEW &&
-      !closedPanels(snapshot).some(hasPendingMedia)
-    ) {
+    if (snapshot.game.status === StoryStatus.REVIEW && !hasPendingWork(snapshot)) {
       await this.finishStory(gameId);
     }
   }
@@ -671,6 +732,7 @@ export class StoryGameService {
       if (game.status !== StoryStatus.PROCESSING) return null;
 
       game.status = StoryStatus.REVIEW;
+      game.reviewAt = null;
       entered = true;
       outbox.push({ event: STORY_EVENTS.stateChanged, payload: { snapshot } });
       outbox.push({
@@ -897,6 +959,9 @@ export class StoryGameService {
         seq: 0,
         dueAt: game.mediaDeadlineAt,
       });
+    }
+    if (game.reviewAt !== null && game.status === StoryStatus.PROCESSING) {
+      jobs.push({ gameId: game.gameId, kind: 'review-wait', seq: 0, dueAt: game.reviewAt });
     }
     if (
       game.status === StoryStatus.PLAYING &&

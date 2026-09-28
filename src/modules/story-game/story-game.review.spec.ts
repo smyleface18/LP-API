@@ -161,14 +161,15 @@ describe('StoryGameService — end of the story (phase 4a)', () => {
         total: 70,
       },
       reactions: {},
-      // REVIEW llega con la media de la primera viñeta: el resto sigue en la
-      // cola y le llega a la sala por `panelMediaReady`.
+      // REVIEW espera a que esté toda la media (ver story-game.media.spec.ts):
+      // acá la cola la genera de una.
       audioUrl: null,
-      speechMarks: null,
+      speechMarks: [],
       imageUrl: null,
-      mediaStatus: 'pending',
-      imageStatus: 'pending',
+      mediaStatus: 'ready',
+      imageStatus: 'none',
     });
+    expect(manifest.title).toBe('The Robot Adventure');
     expect(manifest.panels[0]).toMatchObject({ mediaStatus: 'ready', speechMarks: [] });
     expect(manifest.panels[1].characterIds).toEqual(['ch-0-0']);
     // Venció sin texto: no hay nada que narrar.

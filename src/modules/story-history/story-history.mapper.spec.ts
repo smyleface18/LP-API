@@ -66,6 +66,7 @@ describe('story history mapper', () => {
     expect(story).toEqual({
       id: snapshot.game.storyId,
       gameId: snapshot.game.gameId,
+      title: 'The Robot Adventure',
       level: 'A2',
       language: 'en-US',
       panelsCount: 4,

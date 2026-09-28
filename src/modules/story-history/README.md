@@ -15,7 +15,7 @@ El id de la historieta es el `storyId` que la partida recibe al empezar la gener
 
 | Tabla               | Contenido                                                                                           |
 | ------------------- | --------------------------------------------------------------------------------------------------- |
-| `story`             | `gameId` (único), nivel, idioma, viñetas configuradas, elenco (jsonb) y `finishedAt`.               |
+| `story`             | `gameId` (único), `title` (el que puso la IA; null si no hubo), nivel, idioma, viñetas configuradas, elenco (jsonb) y `finishedAt`. |
 | `story_panel`       | Una por viñeta (`story_id` + `order` únicos): autor (y su nombre al jugar), texto original y final, escenario, personajes, correcciones, puntaje, reacciones (jsonb), `mediaStatus` y keys de S3 del audio y la imagen, speech marks. |
 | `story_participant` | Uno por jugador (`story_id` + `user_id` únicos, índice por `user_id`): nombre al jugar, puesto, viñetas, puntaje total y promedio, si salió. |
 
@@ -30,7 +30,7 @@ Con `Authorization: Bearer <access token>` (`JwtAuthGuard`). Respuesta con el fo
 | `GET /story/history?page&limit` | `StoryHistoryPage`: `{ items, page, limit, total }`, de la más reciente a la más vieja. `limit` hasta 50 (por defecto 20). |
 | `GET /story/history/:storyId`  | El manifiesto de la historieta, con el mismo formato que `storyReviewReady` (ver README de `story-game`). |
 
-Cada `item` es `{ storyId, finishedAt, level, panelsCount, excerpt, coverImageUrl, players: [{ userId, name, avatarUrl }], myPosition, myScore }`: `excerpt` es el texto de la primera viñeta y `coverImageUrl` la primera imagen firmada.
+Cada `item` es `{ storyId, title, finishedAt, level, panelsCount, excerpt, coverImageUrl, players: [{ userId, name, avatarUrl }], myPosition, myScore }`: `excerpt` es el texto de la primera viñeta y `coverImageUrl` la primera imagen firmada.
 
 Solo los participantes ven una historieta: a cualquier otro `GET /story/history/:storyId` le responde **404** (sin revelar que existe).
 

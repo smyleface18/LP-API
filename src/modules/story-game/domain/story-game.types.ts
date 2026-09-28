@@ -123,6 +123,16 @@ export interface StoryGame {
    * `pending` pasan a `failed` y la partida avanza. null si no hay nada pendiente.
    */
   mediaDeadlineAt: number | null;
+  /**
+   * Hasta cuándo PROCESSING espera a que esté todo (audios, imágenes y título)
+   * antes de pasar igual a REVIEW con el audio de la primera viñeta. Se fija al
+   * pedir la media; null si no hay espera (ya venció o no hay media).
+   */
+  reviewAt: number | null;
+  /** Título de la historieta (lo pone la IA al terminar); null si no hay. */
+  title: string | null;
+  /** El título se está generando: la historieta no termina hasta que llega o vence el plazo. */
+  titlePending: boolean;
 }
 
 /** Lo que el autor envía en `submitPanelDraft`. */

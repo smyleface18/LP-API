@@ -37,6 +37,9 @@ const snapshot = (gameId = 'g1'): StorySnapshot => ({
     createdAt: 1,
     storyId: null,
     mediaDeadlineAt: null,
+    reviewAt: null,
+    title: null,
+    titlePending: false,
   },
   characters: {},
   panels: {},
@@ -54,6 +57,7 @@ const REVIEW_RESULT = {
 const MANIFEST: ReviewManifest = {
   storyId: 'g1',
   gameId: 'g1',
+  title: 'The Robot Adventure',
   characters: [],
   ranking: [],
   panels: [],

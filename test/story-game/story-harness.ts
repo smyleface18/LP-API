@@ -4,6 +4,7 @@ import { User } from '@/db/entities';
 import { LockHandle } from '@/common/src/redis/redis-lock.service';
 import { UniqueNamesAdapter } from '@/common/src/unique-names/unique-names.adapter';
 import { LanguageReviewer } from '@/modules/language-review/language-reviewer';
+import { StoryTitleInput, StoryTitler } from '@/modules/language-review/story-titler';
 import {
   LanguageReview,
   LanguageReviewInput,
@@ -123,6 +124,11 @@ export function createStoryHarness(start = 1_800_000_000_000) {
       }),
     ),
   };
+  const titler = {
+    title: jest.fn<Promise<string | null>, [StoryTitleInput]>(() =>
+      Promise.resolve('The Robot Adventure'),
+    ),
+  };
   let nextName = 0;
 
   const users = {
@@ -145,6 +151,7 @@ export function createStoryHarness(start = 1_800_000_000_000) {
     events as unknown as EventEmitter2,
     reviewer as unknown as LanguageReviewer,
     urls as unknown as StoryUrlSigner,
+    titler as unknown as StoryTitler,
   );
 
   /** Partida con `ids` en orden de entrada; el primero es el anfitrión. */
@@ -217,6 +224,7 @@ export function createStoryHarness(start = 1_800_000_000_000) {
     store,
     events,
     reviewer,
+    titler,
     users,
     urls,
     service,

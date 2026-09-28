@@ -51,6 +51,9 @@ const GAME: StoryGame = {
   createdAt: 1,
   storyId: null,
   mediaDeadlineAt: null,
+  reviewAt: null,
+  title: null,
+  titlePending: false,
 };
 
 interface EvalOptions {
@@ -167,11 +170,14 @@ describe('StoryStateRepository (mocked Redis)', () => {
     const [gameOps] = JSON.parse(evalOptions().arguments[2]) as { del: string[] }[];
     expect(gameOps.del).toEqual([
       'storyId',
+      'title',
+      'titlePending',
       'currentPanel',
       'turnEndsAt',
       'turnCloseAt',
       'abandonAt',
       'mediaDeadlineAt',
+      'reviewAt',
     ]);
   });
 

@@ -3,6 +3,8 @@ import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
 import { EnvsService } from '@/common/src/envs/envs.service';
 import { LanguageReviewer } from './language-reviewer';
 import { BEDROCK_CLIENT, LanguageReviewService } from './language-review.service';
+import { StoryTitler } from './story-titler';
+import { BedrockStoryTitler } from './bedrock-story-titler';
 
 @Module({
   providers: [
@@ -14,7 +16,8 @@ import { BEDROCK_CLIENT, LanguageReviewService } from './language-review.service
         new BedrockRuntimeClient({ region: envs.bedrockRegion, maxAttempts: 1 }),
     },
     { provide: LanguageReviewer, useClass: LanguageReviewService },
+    { provide: StoryTitler, useClass: BedrockStoryTitler },
   ],
-  exports: [LanguageReviewer],
+  exports: [LanguageReviewer, StoryTitler],
 })
 export class LanguageReviewModule {}

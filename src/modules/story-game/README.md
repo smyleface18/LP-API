@@ -29,7 +29,7 @@ LOBBY → PLAYING → PROCESSING → REVIEW → FINISHED
 LOBBY/PLAYING → ABANDONED (nadie conectado durante 60 s, o ya nadie puede volver)
 ```
 
-PROCESSING y REVIEW nunca se abandonan: la historieta se termina de generar y se guarda en el historial aunque todos se hayan ido. PROCESSING dura hasta que la primera viñeta tiene su audio, y REVIEW hasta que no queda audio ni imagen pendiente (ver Fin de la partida).
+PROCESSING y REVIEW nunca se abandonan: la historieta se termina de generar y se guarda en el historial aunque todos se hayan ido. PROCESSING dura hasta que está todo (audios, imágenes y título) o, como máximo, `REVIEW_MAX_WAIT_MS` (30 s) si la primera viñeta ya tiene audio; REVIEW dura hasta que no queda nada pendiente (ver Fin de la partida).
 
 Solo el servidor cambia el estado. Un evento que no corresponde al estado actual devuelve `INVALID_STATE`.
 
@@ -40,7 +40,7 @@ TTL: `MATCH_TTL` (se renueva en cada escritura). Una partida FINISHED usa `FINIS
 ```text
 story:{gameId}              hash: status, hostId, config (json), players (json, en orden de entrada, con avatarKey),
                             currentPanel, turnEndsAt, turnCloseAt, abandonAt, abandonSeq, createdAt,
-                            storyId, mediaDeadlineAt
+                            storyId, mediaDeadlineAt, reviewAt, title, titlePending
 story:{gameId}:characters   hash: characterId → { id, name, kind, description, createdBy, introducedInPanel }
 story:{gameId}:panels       hash: order → viñeta (PanelState, json, con `media`: status y keys de S3)
 story:{gameId}:lock         lock de la partida (RedisLockService)
@@ -74,7 +74,8 @@ Mismo patrón que la trivia (`GameTimeoutQueue`): el servicio emite `story.sched
 | -------------- | ------------ | ----------------------------------------------------------- | ------------------------------------------------ |
 | `abandon-idle` | `abandonSeq` | LOBBY/PLAYING, mismo `abandonSeq`, nadie conectado          | Pasa a ABANDONED.                                |
 | `close-turn`   | viñeta       | PLAYING, `currentPanel = seq`, `turnCloseAt = dueAt`, abierta | Cierra el turno por tiempo (confirma o rellena), o lo difiere si hay una revisión en curso. |
-| `media-deadline` | 0          | PROCESSING/REVIEW, `mediaDeadlineAt = dueAt`                | El audio o la imagen que sigan `pending` quedan `failed` (un audio ya generado se conserva) y la partida avanza a REVIEW/FINISHED. |
+| `media-deadline` | 0          | PROCESSING/REVIEW, `mediaDeadlineAt = dueAt`                | El audio o la imagen que sigan `pending` quedan `failed` (un audio ya generado se conserva), deja de esperar el título y la partida avanza a REVIEW/FINISHED. |
+| `review-wait`  | 0            | PROCESSING, `reviewAt = dueAt`                              | Termina la espera: el review empieza en cuanto la primera viñeta tenga audio, aunque falten imágenes o el título. |
 
 `turnEndsAt` es el fin del turno que ven los clientes. `turnCloseAt` es cuándo corre `close-turn`: normalmente es igual, salvo cuando el turno vence con una revisión en curso (ver Turnos, punto 4).
 
@@ -134,12 +135,12 @@ Jugadores que se van durante PLAYING:
 
 Al cerrarse la última viñeta (o al quedar menos de 2 jugadores), la partida pasa a PROCESSING y el servicio emite el evento interno `story.processing-started`. `StoryGameService.onProcessingStarted` (`@OnEvent`) es el **único punto** de la generación:
 
-1. `requestMedia`: asigna el `storyId` (un UUID: es el id del historial en Postgres), marca cada viñeta confirmada como `pending` (o `none` si venció sin texto), fija `mediaDeadlineAt = ahora + MEDIA_DEADLINE_MS` (3 min) y emite `story.media-requested`. Idempotente: si ya hay `storyId`, no hace nada.
+1. `requestMedia`: asigna el `storyId` (un UUID: es el id del historial en Postgres), marca cada viñeta confirmada como `pending` (o `none` si venció sin texto), fija `mediaDeadlineAt = ahora + MEDIA_DEADLINE_MS` (3 min) y `reviewAt = ahora + REVIEW_MAX_WAIT_MS` (30 s), marca `titlePending` y emite `story.media-requested`. En paralelo, `generateTitle` le pide el título a `StoryTitler` (ver README de `language-review`) y lo guarda en `game.title` (null si la IA no da uno). Idempotente: si ya hay `storyId`, no hace nada.
 2. `StoryMediaQueue` crea dos tareas por viñeta en la cola `story-media`: `panel-audio` (id fijo `{gameId}__audio__{order}`) y `panel-image` (`{gameId}__image__{order}`). Los audios tienen prioridad (`STORY_MEDIA_JOB_PRIORITY`): salen todos antes que las imágenes, así una imagen lenta o con reintentos nunca demora el audio de otra viñeta. Dentro de cada tipo, la primera viñeta sale primero. `StoryMediaProcessor` (concurrencia `STORY_MEDIA_CONCURRENCY` = 2) llama a `StoryMediaService.generateAudio` o `generateImage` y le pasa el resultado a `onPanelAudio` u `onPanelImage`. Antes de dibujar pregunta `isImagePending`: si la imagen ya no está pendiente (venció el plazo o hubo un 429), no llama al proveedor.
-3. `onPanelAudio` guarda el audio solo si sigue `pending` (el primer resultado gana): con audio la viñeta queda `ready` aunque su imagen siga pendiente. `onPanelImage` guarda la imagen solo si su `imageStatus` sigue `pending`; si el resultado viene con `rateLimited` (el proveedor respondió 429), las demás imágenes pendientes de la historieta quedan `failed` sin llamar al proveedor. Cada cambio emite `story.panel-media-ready` (la imagen llega en un segundo `panelMediaReady`) y el avance (`story.processing`, que cuenta los audios).
+3. `onPanelAudio` guarda el audio solo si sigue `pending` (el primer resultado gana): con audio la viñeta queda `ready` aunque su imagen siga pendiente. `onPanelImage` guarda la imagen solo si su `imageStatus` sigue `pending`; si el resultado viene con `rateLimited` (el proveedor respondió 429), las demás imágenes pendientes de la historieta quedan `failed` sin llamar al proveedor. Cada cambio emite `story.panel-media-ready` (la imagen llega en un segundo `panelMediaReady`) y el avance (`story.processing`, que cuenta las viñetas con audio e imagen terminados).
 4. `advanceAfterMedia`, después de cada resultado:
-   - PROCESSING → REVIEW (`enterReview`) cuando el **audio** de la primera viñeta ya no está pendiente. Emite `lobbyUpdated` y `storyReviewReady` con el manifiesto a la sala, y libera `user:{userId}:story` de todos los jugadores (solo si todavía apunta a esta partida). Desde ahí pueden crear o unirse a otra partida sin `ALREADY_IN_GAME`. Las viñetas que faltan le llegan a la sala por `panelMediaReady`.
-   - REVIEW → FINISHED (`finishStory`) cuando no queda **nada** pendiente, ni audio ni imagen. TTL de 24 h y evento `story.finished`, con el que `StoryHistoryService` la guarda en Postgres (Fase 4c).
+   - PROCESSING → REVIEW (`enterReview`) cuando no falta **nada** (audios, imágenes y título), para que el review aparezca completo; o, si vence la espera (`review-wait`), en cuanto el **audio** de la primera viñeta ya no está pendiente. Emite `lobbyUpdated` y `storyReviewReady` con el manifiesto a la sala, y libera `user:{userId}:story` de todos los jugadores (solo si todavía apunta a esta partida). Desde ahí pueden crear o unirse a otra partida sin `ALREADY_IN_GAME`. Las viñetas que faltan le llegan a la sala por `panelMediaReady`.
+   - REVIEW → FINISHED (`finishStory`) cuando no queda **nada** pendiente: ni audio, ni imagen, ni el título. TTL de 24 h y evento `story.finished`, con el que `StoryHistoryService` la guarda en Postgres (Fase 4c).
 5. Si vence el plazo (`media-deadline`), el audio o la imagen que sigan pendientes quedan `failed` y la partida avanza igual; un audio ya generado nunca se descarta: una cola caída, una tarea perdida o AWS sin responder nunca dejan una partida en PROCESSING.
 
 Una viñeta es `ready` si tiene audio y `failed` si no. La imagen va aparte, en `media.imageStatus` (`none` sin proveedor de imágenes o sin texto, `pending`, `ready` o `failed` si el proveedor falló en todos los intentos o venció el plazo); sin imagen, la viñeta se lee igual. Sin ninguna viñeta con texto no se pide nada y la partida pasa directo a FINISHED. Las transiciones son idempotentes (solo actúan desde el estado anterior).
@@ -151,6 +152,7 @@ Como la partida ya no es la activa del usuario, `getReviewManifest` y `reactToPa
 ```ts
 {
   storyId: string;            // id en Postgres (GET /story/history/:storyId)
+  title: string | null;       // título que puso la IA; null si no hubo
   gameId: string;
   characters: {               // elenco, en orden de creación
     id: string; name: string; kind: string; description: string;

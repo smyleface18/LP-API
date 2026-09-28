@@ -52,6 +52,8 @@ export interface ReviewManifest {
   /** Hasta que exista la persistencia (Fase 4c) es el gameId. */
   storyId: string;
   gameId: string;
+  /** Título que puso la IA; null si todavía no hay o no se pudo generar. */
+  title: string | null;
   characters: StoryCharacter[];
   ranking: ScoreboardEntry[];
   panels: ReviewPanel[];
@@ -96,6 +98,7 @@ export function toReviewManifest(
   return {
     storyId: game.storyId ?? game.gameId,
     gameId: game.gameId,
+    title: game.title,
     characters: castOf(snapshot),
     ranking: scoreboardOf(game, avatars),
     panels: closedPanels(snapshot).map((panel) => ({
