@@ -1,4 +1,4 @@
-import { buildPanelImagePrompt, seedForStory } from './panel-image-prompt';
+import { buildPanelImagePrompt, seedForGame } from './panel-image-prompt';
 import { IMAGE_PROMPT_MAX_CHARS } from './story-media.config';
 
 describe('buildPanelImagePrompt', () => {
@@ -34,12 +34,12 @@ describe('buildPanelImagePrompt', () => {
   });
 });
 
-describe('seedForStory', () => {
+describe('seedForGame', () => {
   it('is stable for a story and inside the Nova Canvas range', () => {
-    const seed = seedForStory('3f2b8a3e-1c7d-4a5e-9f00-1234567890ab');
-    expect(seed).toBe(seedForStory('3f2b8a3e-1c7d-4a5e-9f00-1234567890ab'));
+    const seed = seedForGame('3f2b8a3e-1c7d-4a5e-9f00-1234567890ab');
+    expect(seed).toBe(seedForGame('3f2b8a3e-1c7d-4a5e-9f00-1234567890ab'));
     expect(seed).toBeGreaterThanOrEqual(0);
     expect(seed).toBeLessThanOrEqual(858_993_459);
-    expect(seedForStory('another-story')).not.toBe(seed);
+    expect(seedForGame('another-story')).not.toBe(seed);
   });
 });

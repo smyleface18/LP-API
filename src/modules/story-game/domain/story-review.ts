@@ -3,6 +3,8 @@ import { StoryReaction } from '../story-game.config';
 import { castOf, closedPanels } from './story-turns';
 import type { AvatarUrls, MediaUrls } from './story-game.views';
 import {
+  imageStatusOf,
+  PanelImageStatus,
   PanelMediaStatus,
   PanelScore,
   SpeechMark,
@@ -11,7 +13,7 @@ import {
   StorySnapshot,
 } from './story-game.types';
 
-export type { PanelMediaStatus, SpeechMark };
+export type { PanelImageStatus, PanelMediaStatus, SpeechMark };
 
 /** Puntaje acumulado de un jugador: `scoreboard` de gameState y `ranking` del manifiesto. */
 export interface ScoreboardEntry {
@@ -42,6 +44,7 @@ export interface ReviewPanel {
   speechMarks: SpeechMark[] | null;
   imageUrl: string | null;
   mediaStatus: PanelMediaStatus;
+  imageStatus: PanelImageStatus;
 }
 
 /** Manifiesto del review final: `storyReviewReady` y `getReviewManifest`. */
@@ -109,6 +112,7 @@ export function toReviewManifest(
       speechMarks: panel.media?.speechMarks ?? null,
       imageUrl: media[panel.order]?.imageUrl ?? null,
       mediaStatus: panel.media?.status ?? 'none',
+      imageStatus: imageStatusOf(panel.media),
     })),
   };
 }

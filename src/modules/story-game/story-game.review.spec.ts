@@ -167,6 +167,7 @@ describe('StoryGameService — end of the story (phase 4a)', () => {
       speechMarks: null,
       imageUrl: null,
       mediaStatus: 'pending',
+      imageStatus: 'pending',
     });
     expect(manifest.panels[0]).toMatchObject({ mediaStatus: 'ready', speechMarks: [] });
     expect(manifest.panels[1].characterIds).toEqual(['ch-0-0']);
@@ -176,6 +177,7 @@ describe('StoryGameService — end of the story (phase 4a)', () => {
       finalText: OUT_OF_TIME_TEXT,
       score: { total: 0 },
       mediaStatus: 'none',
+      imageStatus: 'none',
     });
   });
 

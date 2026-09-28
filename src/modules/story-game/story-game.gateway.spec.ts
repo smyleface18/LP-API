@@ -370,6 +370,7 @@ describe('StoryGameGateway', () => {
           gameId: 'g1',
           order: 0,
           mediaStatus: 'ready',
+          imageStatus: 'none',
           audioUrl: 'https://signed/audio',
           imageUrl: null,
           speechMarks: media.speechMarks,

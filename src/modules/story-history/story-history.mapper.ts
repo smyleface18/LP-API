@@ -119,6 +119,8 @@ export function toStoryManifest(
       speechMarks: panel.speechMarks,
       imageUrl: media[panel.order]?.imageUrl ?? null,
       mediaStatus: panel.mediaStatus as ReviewManifest['panels'][number]['mediaStatus'],
+      // El historial no guarda el estado de la imagen: sin imagen guardada es `none`.
+      imageStatus: panel.imageKey ? 'ready' : 'none',
     })),
   };
 }

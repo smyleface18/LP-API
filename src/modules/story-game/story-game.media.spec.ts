@@ -28,7 +28,13 @@ const ready = (order: number): PanelMedia => ({
   imageKey: `story/s/panel-${order}.png`,
   speechMarks: [{ time: 0, start: 0, end: 3, value: 'The' }],
 });
-const FAILED: PanelMedia = { status: 'failed', audioKey: null, imageKey: null, speechMarks: null };
+const FAILED: PanelMedia = {
+  status: 'failed',
+  audioKey: null,
+  imageKey: null,
+  imageStatus: 'failed',
+  speechMarks: null,
+};
 
 describe('StoryGameService — story media (phase 4b)', () => {
   const T0 = 1_800_000_000_000;

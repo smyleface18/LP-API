@@ -206,7 +206,24 @@ export interface PanelMedia {
   status: PanelMediaStatus;
   audioKey: string | null;
   imageKey: string | null;
+  /** Estado de la imagen. Partidas anteriores no lo tienen (ver `imageStatusOf`). */
+  imageStatus?: PanelImageStatus;
   speechMarks: SpeechMark[] | null;
+}
+
+/**
+ * Imagen de una viñeta (independiente del audio: sin imagen, la viñeta se lee igual).
+ * - `none`: no se dibuja (sin proveedor de imágenes, o la viñeta venció sin texto).
+ * - `pending`: en la cola de generación.
+ * - `ready`: dibujada y subida a S3.
+ * - `failed`: el proveedor falló en todos los intentos, o venció el plazo.
+ */
+export type PanelImageStatus = 'none' | 'pending' | 'ready' | 'failed';
+
+/** `imageStatus` de una media, derivado de `imageKey` si es de una partida anterior. */
+export function imageStatusOf(media: PanelMedia | undefined): PanelImageStatus {
+  if (!media) return 'none';
+  return media.imageStatus ?? (media.imageKey ? 'ready' : 'none');
 }
 
 /** Qué está haciendo el autor del turno en curso (`authorStatus`). */

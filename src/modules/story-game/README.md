@@ -142,7 +142,7 @@ Al cerrarse la última viñeta (o al quedar menos de 2 jugadores), la partida pa
    - REVIEW → FINISHED (`finishStory`) cuando **ninguna** está pendiente. TTL de 24 h y evento `story.finished`, con el que `StoryHistoryService` la guarda en Postgres (Fase 4c).
 5. Si vence el plazo (`media-deadline`), lo pendiente queda `failed` y la partida avanza igual: una cola caída, una tarea perdida o AWS sin responder nunca dejan una partida en PROCESSING.
 
-Una viñeta es `ready` si tiene audio (la imagen es opcional: sin `BEDROCK_IMAGE_MODEL_ID` no se dibuja, y si falla sola no importa) y `failed` si no. Sin ninguna viñeta con texto no se pide nada y la partida pasa directo a FINISHED. Las transiciones son idempotentes (solo actúan desde el estado anterior).
+Una viñeta es `ready` si tiene audio y `failed` si no. La imagen va aparte, en `media.imageStatus` (`none` sin proveedor de imágenes o sin texto, `pending`, `ready` o `failed` si el proveedor falló en todos los intentos o venció el plazo); sin imagen, la viñeta se lee igual. Sin ninguna viñeta con texto no se pide nada y la partida pasa directo a FINISHED. Las transiciones son idempotentes (solo actúan desde el estado anterior).
 
 Como la partida ya no es la activa del usuario, `getReviewManifest` y `reactToPanel` reciben el `gameId`. `getReviewManifest` funciona en REVIEW y FINISHED para cualquier participante (incluso si salió), y mete al socket en la sala para recibir `panelReaction`. Tras el TTL responde `GAME_NOT_FOUND`.
 
@@ -179,6 +179,7 @@ Como la partida ya no es la activa del usuario, `getReviewManifest` y `reactToPa
     speechMarks: { time: number; start: number; end: number; value: string }[] | null;
     imageUrl: string | null;            // null hasta que haya un ImageGenerator real
     mediaStatus: 'none' | 'pending' | 'ready' | 'failed'; // none = venció sin texto
+    imageStatus: 'none' | 'pending' | 'ready' | 'failed'; // none = sin proveedor de imágenes o sin texto
   }[];
 }
 ```
@@ -217,7 +218,7 @@ Los errores van por el ack si el cliente lo envió; si no, por `storyError`: `{ 
 | `panelConfirmed`    | servidor → sala     | `{ order, authorId, finalText, scene, characterIds, newCharacters, score, confirmedBy }` |
 | `storyProcessing`   | servidor → sala     | En PROCESSING: `{ gameId, panelsTotal, panelsDone }` (avance de la media).              |
 | `storyReviewReady`  | servidor → sala     | Manifiesto, al entrar a REVIEW (con la media de la primera viñeta).                      |
-| `panelMediaReady`   | servidor → sala     | `{ gameId, order, mediaStatus, audioUrl, imageUrl, speechMarks }`: una viñeta terminó su media (URLs firmadas). |
+| `panelMediaReady`   | servidor → sala     | `{ gameId, order, mediaStatus, imageStatus, audioUrl, imageUrl, speechMarks }`: una viñeta terminó su media (URLs firmadas). |
 | `gameState`         | servidor → jugador  | `GameStateView`, al reconectarse.                                                        |
 | `storyError`        | servidor → emisor   | `{ ok: false, status, message, code }`                                                   |
 

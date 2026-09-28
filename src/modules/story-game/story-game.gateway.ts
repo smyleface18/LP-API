@@ -16,7 +16,7 @@ import { WsAuthService } from '@/common/src/ws-auth/ws-auth.service';
 import { StoryGameService } from './story-game.service';
 import { StoryUrlSigner } from './story-url-signer.service';
 import { StoryError } from './domain/story-game.errors';
-import { StorySnapshot } from './domain/story-game.types';
+import { imageStatusOf, StorySnapshot } from './domain/story-game.types';
 import {
   GameStateView,
   LobbyView,
@@ -409,6 +409,7 @@ export class StoryGameGateway implements OnGatewayConnection, OnGatewayDisconnec
         gameId,
         order,
         mediaStatus: media.status,
+        imageStatus: imageStatusOf(media),
         audioUrl,
         imageUrl,
         speechMarks: media.speechMarks,

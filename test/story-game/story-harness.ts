@@ -170,6 +170,7 @@ export function createStoryHarness(start = 1_800_000_000_000) {
       status: 'ready',
       audioKey: `story/s/panel-${order}.mp3`,
       imageKey: null,
+      imageStatus: 'none',
       speechMarks: [],
     }),
     orders?: number[],

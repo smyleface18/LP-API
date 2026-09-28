@@ -489,6 +489,7 @@ export class StoryGameService {
           status: hasText ? 'pending' : 'none',
           audioKey: null,
           imageKey: null,
+          imageStatus: hasText ? 'pending' : 'none',
           speechMarks: null,
         };
         if (!hasText) continue;
@@ -541,7 +542,13 @@ export class StoryGameService {
 
       const expired = closedPanels(snapshot).filter((panel) => panel.media?.status === 'pending');
       for (const panel of expired) {
-        panel.media = { status: 'failed', audioKey: null, imageKey: null, speechMarks: null };
+        panel.media = {
+          status: 'failed',
+          audioKey: null,
+          imageKey: null,
+          imageStatus: 'failed',
+          speechMarks: null,
+        };
       }
       this.logger.warn(`story ${gameId}: media deadline expired (${expired.length} pending)`);
       this.afterMediaSettled(snapshot, expired, outbox);

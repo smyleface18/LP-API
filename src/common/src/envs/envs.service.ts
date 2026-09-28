@@ -82,12 +82,9 @@ export class EnvsService {
     return this.config.get<string>('POLLY_VOICE_ID') || 'Joanna';
   }
 
-  /**
-   * Model ID de Amazon Nova Canvas (Bedrock) para dibujar las viñetas. Sin
-   * definir, las historietas se generan sin imágenes (solo con audio).
-   */
-  get bedrockImageModelId(): string | undefined {
-    return this.config.get<string>('BEDROCK_IMAGE_MODEL_ID') || undefined;
+  /** Valor de una variable opcional; vacía cuenta como no definida. */
+  optional(key: string): string | undefined {
+    return this.config.get<string>(key)?.trim() || undefined;
   }
 
   // Helpers para evitar valores undefined

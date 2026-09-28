@@ -6,15 +6,10 @@ const STYLE =
   "Children's comic book panel, colorful cartoon illustration, clean bold outlines, " +
   'friendly expressive characters, soft lighting.';
 
-/** Lo que Nova Canvas no debe dibujar (texto en la imagen, contenido no apto). */
-export const PANEL_NEGATIVE_PROMPT =
-  'text, letters, words, captions, speech bubbles, watermark, signature, photorealistic, ' +
-  'violence, blood, gore, scary, nudity';
-
 const clean = (value: string) => value.replace(/\s+/g, ' ').trim();
 
 /**
- * Prompt de Nova Canvas para una viñeta: estilo fijo, escenario, fichas de los
+ * Prompt de la imagen de una viñeta: estilo fijo, escenario, fichas de los
  * personajes (para que se vean parecidos en todas) y lo que pasa. Se recorta
  * la acción, que es lo último, si no entra en IMAGE_PROMPT_MAX_CHARS.
  */
@@ -34,9 +29,12 @@ export function buildPanelImagePrompt({ scene, text, characters }: PanelImageInp
   return `${head} ${action.length > room ? action.slice(0, room) : action}`;
 }
 
-/** Semilla de Nova Canvas (0 a 858993459) a partir del id de la historieta. */
-export function seedForStory(storyId: string): number {
+/**
+ * Semilla fija por partida (0 a 858993459), a partir del `gameId`: todas las
+ * viñetas de una historieta se dibujan con la misma y comparten estilo.
+ */
+export function seedForGame(gameId: string): number {
   let hash = 0;
-  for (let i = 0; i < storyId.length; i++) hash = (hash * 31 + storyId.charCodeAt(i)) >>> 0;
+  for (let i = 0; i < gameId.length; i++) hash = (hash * 31 + gameId.charCodeAt(i)) >>> 0;
   return hash % 858_993_460;
 }
