@@ -1,12 +1,17 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Story } from '@/db/entities';
-import { StoryRemovalReason, StoryVisibility } from '@/db/enum/story.enum';
+import { EntityManager, Repository } from 'typeorm';
+import { Story, StoryModerationLog } from '@/db/entities';
+import { StoryModerationAction, StoryRemovalReason, StoryVisibility } from '@/db/enum/story.enum';
 import { StoryGameService } from '@/modules/story-game/story-game.service';
 import { StoryHistoryService } from './story-history.service';
 import { toAdminStoryItem } from './story-history.mapper';
-import { AdminStoryDetail, AdminStoryItem, AdminStoryPage } from './story-history.types';
+import {
+  AdminStoryDetail,
+  AdminStoryItem,
+  AdminStoryModerationEntry,
+  AdminStoryPage,
+} from './story-history.types';
 
 export interface AdminStoriesFilter {
   page: number;
@@ -20,9 +25,10 @@ const likePattern = (search: string) => `%${search.replace(/[\\%_]/g, (char) => 
 
 /**
  * Moderación de historietas (panel de admin): lista todas, publicadas o
- * quitadas, y permite quitar una. Quitar es un borrado lógico: la fila queda
- * con quién, cuándo y por qué, y la historieta deja de verse en el catálogo y
- * en el historial de sus jugadores.
+ * quitadas, y permite quitarlas y restaurarlas. Quitar es un borrado lógico:
+ * la historieta deja de verse en el catálogo y en el historial de sus
+ * jugadores. Cada acción queda en `StoryModerationLog` (quién, cuándo, qué y
+ * por qué), en la misma transacción que el cambio de estado.
  */
 @Injectable()
 export class StoryAdminService {
@@ -30,6 +36,8 @@ export class StoryAdminService {
 
   constructor(
     @InjectRepository(Story) private readonly stories: Repository<Story>,
+    @InjectRepository(StoryModerationLog)
+    private readonly moderationLog: Repository<StoryModerationLog>,
     private readonly history: StoryHistoryService,
     private readonly game: StoryGameService,
   ) {}
@@ -66,11 +74,12 @@ export class StoryAdminService {
   /** Detalle de cualquier historieta (también las quitadas), con el manifiesto completo. */
   async get(storyId: string): Promise<AdminStoryDetail> {
     const story = await this.findOrFail(storyId);
-    const [item, manifest] = await Promise.all([
+    const [item, manifest, history] = await Promise.all([
       this.toItem(story),
       this.history.manifestOf(story),
+      this.moderationHistory(storyId),
     ]);
-    return { ...item, manifest };
+    return { ...item, manifest, moderationHistory: history };
   }
 
   /**
@@ -88,23 +97,22 @@ export class StoryAdminService {
       throw new ConflictException('The story was already removed');
     }
 
-    // Guarda condicional: si dos admins la quitan a la vez, solo gana uno.
-    const result = await this.stories
-      .createQueryBuilder()
-      .update(Story)
-      .set({
-        visibility: StoryVisibility.REMOVED,
+    await this.stories.manager.transaction(async (manager) => {
+      const changed = await this.setVisibility(manager, storyId, StoryVisibility.REMOVED, {
         removedAt: () => 'now()',
         removedById: adminId,
         removalReason: reason,
         removalNote: note ?? null,
-      })
-      .where('id = :storyId AND visibility = :published', {
+      });
+      if (!changed) throw new ConflictException('The story was already removed');
+      await manager.insert(StoryModerationLog, {
         storyId,
-        published: StoryVisibility.PUBLISHED,
-      })
-      .execute();
-    if (!result.affected) throw new ConflictException('The story was already removed');
+        action: StoryModerationAction.REMOVED,
+        adminId,
+        reason,
+        note: note ?? null,
+      });
+    });
 
     this.logger.warn(`story ${storyId} (game ${story.gameId}) removed by ${adminId}: ${reason}`);
     await this.game.discardFinishedStory(story.gameId).catch((error: Error) =>
@@ -112,6 +120,75 @@ export class StoryAdminService {
       this.logger.error(`story ${story.gameId}: could not discard it from Redis: ${error.message}`),
     );
     return this.get(storyId);
+  }
+
+  /**
+   * Restaura una historieta quitada: vuelve al catálogo y al historial de sus
+   * jugadores, y se vacían los datos de la remoción (quedan en el historial de
+   * moderación). 409 si ya estaba publicada.
+   */
+  async restore(storyId: string, adminId: string, note?: string): Promise<AdminStoryDetail> {
+    const story = await this.findOrFail(storyId);
+    if (story.visibility === StoryVisibility.PUBLISHED) {
+      throw new ConflictException('The story is already published');
+    }
+
+    await this.stories.manager.transaction(async (manager) => {
+      const changed = await this.setVisibility(manager, storyId, StoryVisibility.PUBLISHED, {
+        removedAt: null,
+        removedById: null,
+        removalReason: null,
+        removalNote: null,
+      });
+      if (!changed) throw new ConflictException('The story is already published');
+      await manager.insert(StoryModerationLog, {
+        storyId,
+        action: StoryModerationAction.RESTORED,
+        adminId,
+        reason: null,
+        note: note ?? null,
+      });
+    });
+
+    this.logger.warn(`story ${storyId} (game ${story.gameId}) restored by ${adminId}`);
+    return this.get(storyId);
+  }
+
+  /**
+   * Cambia la visibilidad solo si está en la contraria (guarda contra dos
+   * admins a la vez: solo uno gana). Devuelve si cambió.
+   */
+  private async setVisibility(
+    manager: EntityManager,
+    storyId: string,
+    visibility: StoryVisibility,
+    removal: Record<string, unknown>,
+  ): Promise<boolean> {
+    const from =
+      visibility === StoryVisibility.REMOVED ? StoryVisibility.PUBLISHED : StoryVisibility.REMOVED;
+    const result = await manager
+      .createQueryBuilder()
+      .update(Story)
+      .set({ visibility, ...removal })
+      .where('id = :storyId AND visibility = :from', { storyId, from })
+      .execute();
+    return !!result.affected;
+  }
+
+  /** Acciones de moderación de la historieta, de la más reciente a la más vieja. */
+  private async moderationHistory(storyId: string): Promise<AdminStoryModerationEntry[]> {
+    const entries = await this.moderationLog.find({
+      where: { storyId },
+      relations: { admin: true },
+      order: { createdAt: 'DESC' },
+    });
+    return entries.map((entry) => ({
+      action: entry.action,
+      at: entry.createdAt.toISOString(),
+      admin: entry.admin ? { userId: entry.admin.id, username: entry.admin.username } : null,
+      reason: entry.reason,
+      note: entry.note,
+    }));
   }
 
   private adminQuery() {

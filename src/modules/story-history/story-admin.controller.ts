@@ -15,7 +15,7 @@ import { Roles } from '../auth/roles.decorator';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { CognitoUser } from '../auth/type';
 import { StoryAdminService } from './story-admin.service';
-import { AdminStoriesQueryDto, RemoveStoryDto } from './dto/story-admin.dto';
+import { AdminStoriesQueryDto, RemoveStoryDto, RestoreStoryDto } from './dto/story-admin.dto';
 
 /** Moderación de historietas: solo ADMIN. */
 @Controller('admin/stories')
@@ -30,7 +30,7 @@ export class StoryAdminController {
     return this.admin.list(query);
   }
 
-  /** `GET /admin/stories/:storyId`: resumen, jugadores, remoción y manifiesto completo. */
+  /** `GET /admin/stories/:storyId`: resumen, jugadores, remoción, historial y manifiesto. */
   @Get(':storyId')
   get(@Param('storyId', ParseUUIDPipe) storyId: string) {
     return this.admin.get(storyId);
@@ -44,5 +44,15 @@ export class StoryAdminController {
     @Body() dto: RemoveStoryDto,
   ) {
     return this.admin.remove(storyId, admin.username, dto.reason, dto.note);
+  }
+
+  /** `POST /admin/stories/:storyId/restore` `{ note? }`: la vuelve a publicar. */
+  @Post(':storyId/restore')
+  restore(
+    @CurrentUser() admin: CognitoUser,
+    @Param('storyId', ParseUUIDPipe) storyId: string,
+    @Body() dto: RestoreStoryDto,
+  ) {
+    return this.admin.restore(storyId, admin.username, dto.note);
   }
 }

@@ -1,5 +1,5 @@
 import { ArgumentMetadata, BadRequestException, ValidationPipe } from '@nestjs/common';
-import { AdminStoriesQueryDto, RemoveStoryDto } from './story-admin.dto';
+import { AdminStoriesQueryDto, RemoveStoryDto, RestoreStoryDto } from './story-admin.dto';
 import { StoryCatalogQueryDto } from './story-catalog-query.dto';
 
 // Mismas opciones que el ValidationPipe global de main.ts.
@@ -32,6 +32,14 @@ describe('story admin DTOs', () => {
     ])('rejects %s', async (_, value) => {
       await expect(validate(value, RemoveStoryDto)).rejects.toBeInstanceOf(BadRequestException);
     });
+  });
+
+  it('RestoreStoryDto takes an optional note', async () => {
+    await expect(validate({}, RestoreStoryDto)).resolves.toEqual({});
+    await expect(validate({ note: ' ok ' }, RestoreStoryDto)).resolves.toEqual({ note: 'ok' });
+    await expect(validate({ note: 'x'.repeat(501) }, RestoreStoryDto)).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
   });
 
   it('parses the admin list filters from the query string', async () => {

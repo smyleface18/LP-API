@@ -6,7 +6,7 @@
  */
 import 'reflect-metadata';
 import { AppDataSource } from '@/db/data-source';
-import { Story } from '@/db/entities';
+import { Story, StoryModerationLog } from '@/db/entities';
 import { StoryVisibility } from '@/db/enum/story.enum';
 import { StoryHistoryService } from '@/modules/story-history/story-history.service';
 import { StoryAdminService } from '@/modules/story-history/story-admin.service';
@@ -24,7 +24,12 @@ async function main() {
   try {
     const stories = AppDataSource.getRepository(Story);
     const history = new StoryHistoryService(stories, signer);
-    const admin = new StoryAdminService(stories, history, {} as StoryGameService);
+    const admin = new StoryAdminService(
+      stories,
+      AppDataSource.getRepository(StoryModerationLog),
+      history,
+      {} as StoryGameService,
+    );
 
     const catalog = await history.listCatalog('nobody', 1, 5);
     console.log(

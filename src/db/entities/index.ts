@@ -9,3 +9,4 @@ export * from './media-asset.entity';
 export * from './story.entity';
 export * from './story-panel.entity';
 export * from './story-participant.entity';
+export * from './story-moderation-log.entity';

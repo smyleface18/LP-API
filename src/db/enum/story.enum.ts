@@ -2,11 +2,18 @@
  * Visibilidad de una historieta terminada.
  * - PUBLISHED: aparece en el catálogo y en el historial de sus jugadores.
  * - REMOVED: un admin la quitó (moderación). No se muestra en ningún lado
- *   salvo en el panel de admin; el registro se conserva para auditoría.
+ *   salvo en el panel de admin; el registro se conserva para auditoría y se
+ *   puede restaurar.
  */
 export enum StoryVisibility {
   PUBLISHED = 'PUBLISHED',
   REMOVED = 'REMOVED',
+}
+
+/** Acción de moderación registrada en `story_moderation_log`. */
+export enum StoryModerationAction {
+  REMOVED = 'REMOVED',
+  RESTORED = 'RESTORED',
 }
 
 /** Por qué un admin quitó una historieta. */

@@ -1,6 +1,6 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Repository } from 'typeorm';
-import { Story } from '@/db/entities';
+import { Story, StoryModerationLog } from '@/db/entities';
 import { StoryRemovalReason, StoryVisibility } from '@/db/enum/story.enum';
 import { StoryGameService } from '@/modules/story-game/story-game.service';
 import { StoryHistoryService } from './story-history.service';
@@ -39,6 +39,8 @@ describe('StoryAdminService', () => {
   let updateBuilder: Record<string, jest.Mock>;
   let history: Record<string, jest.Mock>;
   let game: { discardFinishedStory: jest.Mock };
+  let tx: { createQueryBuilder: jest.Mock; insert: jest.Mock };
+  let moderationLog: { find: jest.Mock };
   let service: StoryAdminService;
 
   beforeEach(() => {
@@ -62,8 +64,28 @@ describe('StoryAdminService', () => {
       manifestOf: jest.fn().mockResolvedValue({ storyId: 'story-1', panels: [] }),
     };
     game = { discardFinishedStory: jest.fn().mockResolvedValue(undefined) };
+    // El cambio de estado y el historial van en una transacción.
+    tx = {
+      createQueryBuilder: jest.fn(() => updateBuilder),
+      insert: jest.fn().mockResolvedValue(undefined),
+    };
+    const stories = {
+      manager: { transaction: jest.fn((fn: (manager: typeof tx) => unknown) => fn(tx)) },
+    };
+    moderationLog = {
+      find: jest.fn().mockResolvedValue([
+        {
+          action: 'REMOVED',
+          createdAt: new Date('2026-09-28T10:00:00Z'),
+          admin: { id: 'admin-1', username: 'Admin' },
+          reason: 'SPAM',
+          note: null,
+        },
+      ]),
+    };
     service = new StoryAdminService(
-      { createQueryBuilder: jest.fn(() => updateBuilder) } as unknown as Repository<Story>,
+      stories as unknown as Repository<Story>,
+      moderationLog as unknown as Repository<StoryModerationLog>,
       history as unknown as StoryHistoryService,
       game as unknown as StoryGameService,
     );
@@ -109,10 +131,24 @@ describe('StoryAdminService', () => {
     });
   });
 
-  it('shows the detail of any story with its full manifest', async () => {
+  it('shows the detail of any story with its full manifest and moderation history', async () => {
     const detail = await service.get('story-1');
     expect(detail).toMatchObject({ storyId: 'story-1', manifest: { storyId: 'story-1' } });
     expect(history.manifestOf).toHaveBeenCalled();
+    expect(moderationLog.find).toHaveBeenCalledWith({
+      where: { storyId: 'story-1' },
+      relations: { admin: true },
+      order: { createdAt: 'DESC' },
+    });
+    expect(detail.moderationHistory).toEqual([
+      {
+        action: 'REMOVED',
+        at: '2026-09-28T10:00:00.000Z',
+        admin: { userId: 'admin-1', username: 'Admin' },
+        reason: 'SPAM',
+        note: null,
+      },
+    ]);
 
     queryBuilder.getOne.mockResolvedValue(null);
     await expect(service.get('missing')).rejects.toBeInstanceOf(NotFoundException);
@@ -129,10 +165,17 @@ describe('StoryAdminService', () => {
         removalReason: 'OTHER',
         removalNote: 'Real phone number',
       });
-      expect(updateBuilder.where).toHaveBeenCalledWith(
-        'id = :storyId AND visibility = :published',
-        { storyId: 'story-1', published: 'PUBLISHED' },
-      );
+      expect(updateBuilder.where).toHaveBeenCalledWith('id = :storyId AND visibility = :from', {
+        storyId: 'story-1',
+        from: 'PUBLISHED',
+      });
+      expect(tx.insert).toHaveBeenCalledWith(StoryModerationLog, {
+        storyId: 'story-1',
+        action: 'REMOVED',
+        adminId: 'admin-1',
+        reason: 'OTHER',
+        note: 'Real phone number',
+      });
       expect(game.discardFinishedStory).toHaveBeenCalledWith('g1');
     });
 
@@ -166,6 +209,7 @@ describe('StoryAdminService', () => {
       await expect(
         service.remove('story-1', 'admin-1', StoryRemovalReason.SPAM),
       ).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.insert).not.toHaveBeenCalled();
       expect(game.discardFinishedStory).not.toHaveBeenCalled();
     });
 
@@ -181,6 +225,55 @@ describe('StoryAdminService', () => {
       await expect(
         service.remove('story-1', 'admin-1', StoryRemovalReason.SPAM),
       ).resolves.toMatchObject({ storyId: 'story-1' });
+    });
+  });
+
+  describe('restore', () => {
+    const removedStory = () =>
+      story({
+        visibility: StoryVisibility.REMOVED,
+        removedAt: new Date('2026-09-28T10:00:00Z'),
+        removedById: 'admin-1',
+        removalReason: StoryRemovalReason.SPAM,
+      });
+
+    it('publishes a removed story again, clears the removal and records who restored it', async () => {
+      queryBuilder.getOne.mockResolvedValue(removedStory());
+      await service.restore('story-1', 'admin-2', 'It was a false alarm');
+
+      expect(updateBuilder.set).toHaveBeenCalledWith({
+        visibility: 'PUBLISHED',
+        removedAt: null,
+        removedById: null,
+        removalReason: null,
+        removalNote: null,
+      });
+      expect(updateBuilder.where).toHaveBeenCalledWith('id = :storyId AND visibility = :from', {
+        storyId: 'story-1',
+        from: 'REMOVED',
+      });
+      expect(tx.insert).toHaveBeenCalledWith(StoryModerationLog, {
+        storyId: 'story-1',
+        action: 'RESTORED',
+        adminId: 'admin-2',
+        reason: null,
+        note: 'It was a false alarm',
+      });
+      expect(game.discardFinishedStory).not.toHaveBeenCalled();
+    });
+
+    it('answers 409 when the story is already published, also if another admin won the race', async () => {
+      await expect(service.restore('story-1', 'admin-2')).rejects.toBeInstanceOf(ConflictException);
+
+      queryBuilder.getOne.mockResolvedValue(removedStory());
+      updateBuilder.execute.mockResolvedValue({ affected: 0 });
+      await expect(service.restore('story-1', 'admin-2')).rejects.toBeInstanceOf(ConflictException);
+      expect(tx.insert).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 for an unknown story', async () => {
+      queryBuilder.getOne.mockResolvedValue(null);
+      await expect(service.restore('missing', 'admin-2')).rejects.toBeInstanceOf(NotFoundException);
     });
   });
 });

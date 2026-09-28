@@ -1,5 +1,5 @@
 import { Level } from '@/db/enum/question.enum';
-import { StoryRemovalReason, StoryVisibility } from '@/db/enum/story.enum';
+import { StoryModerationAction, StoryRemovalReason, StoryVisibility } from '@/db/enum/story.enum';
 import { ReviewManifest } from '@/modules/story-game/domain/story-review';
 
 /** Una historieta en el historial del jugador (`GET /story/history`). */
@@ -75,9 +75,25 @@ export interface AdminStoryItem {
   removal: AdminStoryRemoval | null;
 }
 
-/** Detalle para el admin: el resumen más la historieta completa (manifiesto del review). */
+/** Una acción del historial de moderación (quitar o restaurar). */
+export interface AdminStoryModerationEntry {
+  action: StoryModerationAction;
+  /** ISO 8601. */
+  at: string;
+  /** null si la cuenta del admin ya no existe. */
+  admin: { userId: string; username: string } | null;
+  /** Solo al quitar. */
+  reason: StoryRemovalReason | null;
+  note: string | null;
+}
+
+/**
+ * Detalle para el admin: el resumen, la historieta completa (manifiesto del
+ * review) y el historial de moderación, de la acción más reciente a la más vieja.
+ */
 export interface AdminStoryDetail extends AdminStoryItem {
   manifest: ReviewManifest;
+  moderationHistory: AdminStoryModerationEntry[];
 }
 
 export interface AdminStoryPage {

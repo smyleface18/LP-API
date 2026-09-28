@@ -25,9 +25,11 @@ export interface StoryCharacterRecord {
  * Quiénes la crearon: `participants` (los jugadores, con su puesto) y el
  * `author` de cada viñeta en `panels`.
  *
- * Moderación: un admin puede quitarla (`visibility = REMOVED`). No se borra
- * la fila (queda para auditoría, con quién, cuándo y por qué), pero deja de
- * aparecer en el catálogo y en el historial de los jugadores.
+ * Moderación: un admin puede quitarla (`visibility = REMOVED`) y restaurarla.
+ * No se borra la fila, pero mientras está quitada no aparece en el catálogo ni
+ * en el historial de los jugadores. Los campos `removed*` son el estado actual
+ * (se vacían al restaurar); el historial completo, con quién hizo qué, está en
+ * `StoryModerationLog`.
  */
 @Entity()
 @Index(['visibility', 'finishedAt'])

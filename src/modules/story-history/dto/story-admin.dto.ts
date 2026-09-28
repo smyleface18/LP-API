@@ -23,6 +23,17 @@ export class AdminStoriesQueryDto extends StoryHistoryQueryDto {
   search?: string;
 }
 
+/** `POST /admin/stories/:storyId/restore`. */
+export class RestoreStoryDto {
+  /** Por qué se restaura (opcional). */
+  @IsOptional()
+  @Transform(trim)
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(STORY_REMOVAL_NOTE_MAX_CHARS)
+  note?: string;
+}
+
 /** `POST /admin/stories/:storyId/remove`. */
 export class RemoveStoryDto {
   @IsEnum(StoryRemovalReason)
