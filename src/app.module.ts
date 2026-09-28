@@ -16,6 +16,7 @@ import { MediaModule } from './modules/media/media.module';
 import { StoryGameModule } from './modules/story-game/story-game.module';
 import { StoryQueueModule } from './modules/story-game/queue/story-queue.module';
 import { StoryHistoryModule } from './modules/story-history/story-history.module';
+import { StatsModule } from './modules/stats/stats.module';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { StoryHistoryModule } from './modules/story-history/story-history.module
     StoryGameModule,
     StoryQueueModule,
     StoryHistoryModule,
+    StatsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

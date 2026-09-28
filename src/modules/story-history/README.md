@@ -43,7 +43,7 @@ Cualquier usuario autenticado ve las historietas **publicadas** de todos los jug
 
 | Método y ruta                        | Qué devuelve                                                                     |
 | ------------------------------------ | -------------------------------------------------------------------------------- |
-| `GET /story/catalog?page&limit&level` | `StoryHistoryPage`, de la más reciente a la más vieja; `level` filtra (A1–C2). Los ítems son como los del historial; `myPosition` es null si quien pide no jugó. |
+| `GET /story/catalog?page&limit&level&search` | `StoryHistoryPage`, de la más reciente a la más vieja. `level` filtra por uno o más niveles (`level=A1,A2` o repetido); `search` busca, sin distinguir mayúsculas, en el título, los nombres de los jugadores y el texto de las viñetas (`story-search.ts`, la misma búsqueda del panel de admin). Los ítems son como los del historial; `myPosition` es null si quien pide no jugó. |
 | `GET /story/catalog/:storyId`        | El manifiesto. 404 si no existe o fue quitada.                                    |
 
 ### Moderación (solo ADMIN)

@@ -55,14 +55,33 @@ describe('story admin DTOs', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('accepts an optional level in the catalog', async () => {
-    await expect(validate({ level: 'B1' }, StoryCatalogQueryDto, 'query')).resolves.toMatchObject({
-      page: 1,
-      limit: 20,
-      level: 'B1',
+  describe('StoryCatalogQueryDto', () => {
+    it('accepts one or more levels, as a list or repeated', async () => {
+      await expect(validate({ level: 'B1' }, StoryCatalogQueryDto, 'query')).resolves.toMatchObject(
+        { page: 1, limit: 20, level: ['B1'] },
+      );
+      await expect(
+        validate({ level: 'A1, A2' }, StoryCatalogQueryDto, 'query'),
+      ).resolves.toMatchObject({ level: ['A1', 'A2'] });
+      await expect(
+        validate({ level: ['A1', 'B2'] }, StoryCatalogQueryDto, 'query'),
+      ).resolves.toMatchObject({ level: ['A1', 'B2'] });
     });
-    await expect(validate({ level: 'Z9' }, StoryCatalogQueryDto, 'query')).rejects.toBeInstanceOf(
-      BadRequestException,
-    );
+
+    it('trims the search text', async () => {
+      await expect(
+        validate({ search: '  robot ' }, StoryCatalogQueryDto, 'query'),
+      ).resolves.toMatchObject({ search: 'robot' });
+    });
+
+    it.each([
+      ['an unknown level', { level: 'Z9' }],
+      ['an unknown level in the list', { level: 'A1,Z9' }],
+      ['a search over 100 chars', { search: 'x'.repeat(101) }],
+    ])('rejects %s', async (_, value) => {
+      await expect(validate(value, StoryCatalogQueryDto, 'query')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+    });
   });
 });

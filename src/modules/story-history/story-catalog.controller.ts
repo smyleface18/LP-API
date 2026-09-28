@@ -14,10 +14,16 @@ import { StoryCatalogQueryDto } from './dto/story-catalog-query.dto';
 export class StoryCatalogController {
   constructor(private readonly history: StoryHistoryService) {}
 
-  /** `GET /story/catalog?page=1&limit=20&level=A2`: de la más reciente a la más vieja. */
+  /**
+   * `GET /story/catalog?page=1&limit=20&level=A1,A2&search=robot`: de la más
+   * reciente a la más vieja.
+   */
   @Get()
   list(@CurrentUser() user: CognitoUser, @Query() query: StoryCatalogQueryDto) {
-    return this.history.listCatalog(user.username, query.page, query.limit, query.level);
+    return this.history.listCatalog(user.username, query.page, query.limit, {
+      levels: query.level,
+      search: query.search,
+    });
   }
 
   /** `GET /story/catalog/:storyId`: el manifiesto, con el formato de `storyReviewReady`. */

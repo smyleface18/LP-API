@@ -15,6 +15,7 @@ import { ReviewManifest } from '@/modules/story-game/domain/story-review';
 import { StoryUrlSigner } from '@/modules/story-game/story-url-signer.service';
 import { AvatarUrls } from '@/modules/story-game/domain/story-game.views';
 import { toHistoryItem, toStoryManifest, toStoryRecords } from './story-history.mapper';
+import { whereStoryMatches } from './story-search';
 import { StoryHistoryPage } from './story-history.types';
 
 /**
@@ -102,18 +103,20 @@ export class StoryHistoryService {
 
   /**
    * Catálogo: todas las historietas publicadas, de cualquier jugador, de la
-   * más reciente a la más vieja. `level` filtra por nivel.
+   * más reciente a la más vieja. `levels` filtra por nivel (cualquiera de
+   * ellos) y `search` por título, jugadores o texto de las viñetas.
    */
   async listCatalog(
     userId: string,
     page: number,
     limit: number,
-    level?: Level,
+    { levels, search }: { levels?: Level[]; search?: string } = {},
   ): Promise<StoryHistoryPage> {
     const query = this.detailsQuery().where('story.visibility = :published', {
       published: StoryVisibility.PUBLISHED,
     });
-    if (level) query.andWhere('story.level = :level', { level });
+    if (levels?.length) query.andWhere('story.level IN (:...levels)', { levels });
+    if (search) whereStoryMatches(query, search);
 
     const [stories, total] = await query
       .orderBy('story.finishedAt', 'DESC')

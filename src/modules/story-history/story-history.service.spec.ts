@@ -221,15 +221,25 @@ describe('StoryHistoryService', () => {
   });
 
   describe('catalog', () => {
-    it('lists the published stories of every player, newest first, with a level filter', async () => {
+    it('lists the published stories of every player, newest first, filtered by level and text', async () => {
       queryBuilder.getManyAndCount.mockResolvedValue([[storedStory()], 1]);
-      const page = await service.listCatalog('mallory', 1, 20, 'A2' as never);
+      const page = await service.listCatalog('mallory', 1, 20, {
+        levels: ['A1', 'A2'] as never,
+        search: 'robot',
+      });
 
       expect(queryBuilder.innerJoin).not.toHaveBeenCalled();
       expect(queryBuilder.where).toHaveBeenCalledWith('story.visibility = :published', {
         published: 'PUBLISHED',
       });
-      expect(queryBuilder.andWhere).toHaveBeenCalledWith('story.level = :level', { level: 'A2' });
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith('story.level IN (:...levels)', {
+        levels: ['A1', 'A2'],
+      });
+      // Búsqueda en título, jugadores y viñetas (sin el código de la partida).
+      const [searchSql, params] = queryBuilder.andWhere.mock.calls[1] as [string, object];
+      expect(searchSql).not.toContain('gameId');
+      expect(searchSql).toContain('"finalText" ILIKE :search');
+      expect(params).toEqual({ search: '%robot%' });
       expect(queryBuilder.orderBy).toHaveBeenCalledWith('story.finishedAt', 'DESC');
       // Quien pide no jugó: sin puesto ni puntaje propio.
       expect(page.items[0]).toMatchObject({ storyId: 'story-1', myPosition: null, myScore: 0 });

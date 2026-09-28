@@ -6,6 +6,7 @@ import { StoryModerationAction, StoryRemovalReason, StoryVisibility } from '@/db
 import { StoryGameService } from '@/modules/story-game/story-game.service';
 import { StoryHistoryService } from './story-history.service';
 import { toAdminStoryItem } from './story-history.mapper';
+import { whereStoryMatches } from './story-search';
 import {
   AdminStoryDetail,
   AdminStoryItem,
@@ -19,9 +20,6 @@ export interface AdminStoriesFilter {
   visibility?: StoryVisibility;
   search?: string;
 }
-
-/** Escapa `%`, `_` y `\` para usar el texto del admin dentro de un ILIKE. */
-const likePattern = (search: string) => `%${search.replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
 
 /**
  * Moderación de historietas (panel de admin): lista todas, publicadas o
@@ -50,16 +48,7 @@ export class StoryAdminService {
   async list({ page, limit, visibility, search }: AdminStoriesFilter): Promise<AdminStoryPage> {
     const query = this.adminQuery();
     if (visibility) query.andWhere('story.visibility = :visibility', { visibility });
-    if (search) {
-      query.andWhere(
-        `(story.title ILIKE :search OR story.gameId ILIKE :search
-          OR EXISTS (SELECT 1 FROM "story_participant" sp
-                     WHERE sp."story_id" = story.id AND sp."username" ILIKE :search)
-          OR EXISTS (SELECT 1 FROM "story_panel" sp2
-                     WHERE sp2."story_id" = story.id AND sp2."finalText" ILIKE :search))`,
-        { search: likePattern(search) },
-      );
-    }
+    if (search) whereStoryMatches(query, search, { includeGameId: true });
 
     const [stories, total] = await query
       .orderBy('story.finishedAt', 'DESC')
