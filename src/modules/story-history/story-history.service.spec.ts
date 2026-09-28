@@ -83,7 +83,15 @@ describe('StoryHistoryService', () => {
     };
     manager.transaction.mockImplementation((fn: (m: typeof manager) => unknown) => fn(manager));
     queryBuilder = {};
-    for (const method of ['leftJoinAndSelect', 'innerJoin', 'orderBy', 'skip', 'take', 'where']) {
+    for (const method of [
+      'leftJoinAndSelect',
+      'innerJoin',
+      'orderBy',
+      'skip',
+      'take',
+      'where',
+      'andWhere',
+    ]) {
       queryBuilder[method] = jest.fn(() => queryBuilder);
     }
     queryBuilder.getOne = jest.fn();
@@ -202,6 +210,45 @@ describe('StoryHistoryService', () => {
       queryBuilder.getOne.mockResolvedValue(null);
       await expect(service.get('nope', 'alice')).rejects.toBeInstanceOf(NotFoundException);
     });
+
+    it('only serves published stories (a removed one is a 404)', async () => {
+      queryBuilder.getOne.mockResolvedValue(storedStory());
+      await service.get('story-1', 'alice');
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith('story.visibility = :published', {
+        published: 'PUBLISHED',
+      });
+    });
+  });
+
+  describe('catalog', () => {
+    it('lists the published stories of every player, newest first, with a level filter', async () => {
+      queryBuilder.getManyAndCount.mockResolvedValue([[storedStory()], 1]);
+      const page = await service.listCatalog('mallory', 1, 20, 'A2' as never);
+
+      expect(queryBuilder.innerJoin).not.toHaveBeenCalled();
+      expect(queryBuilder.where).toHaveBeenCalledWith('story.visibility = :published', {
+        published: 'PUBLISHED',
+      });
+      expect(queryBuilder.andWhere).toHaveBeenCalledWith('story.level = :level', { level: 'A2' });
+      expect(queryBuilder.orderBy).toHaveBeenCalledWith('story.finishedAt', 'DESC');
+      // Quien pide no jugó: sin puesto ni puntaje propio.
+      expect(page.items[0]).toMatchObject({ storyId: 'story-1', myPosition: null, myScore: 0 });
+    });
+
+    it('does not filter by level when none is given', async () => {
+      queryBuilder.getManyAndCount.mockResolvedValue([[], 0]);
+      await service.listCatalog('mallory', 1, 20);
+      expect(queryBuilder.andWhere).not.toHaveBeenCalled();
+    });
+
+    it('serves a published story to anyone, and 404 otherwise', async () => {
+      queryBuilder.getOne.mockResolvedValue(storedStory());
+      const manifest = await service.getFromCatalog('story-1');
+      expect(manifest.panels[0].audioUrl).toBe('https://signed/a.mp3');
+
+      queryBuilder.getOne.mockResolvedValue(null);
+      await expect(service.getFromCatalog('story-1')).rejects.toBeInstanceOf(NotFoundException);
+    });
   });
 
   it('lists the stories of the user, newest first, paginated, with a cover', async () => {
@@ -214,6 +261,9 @@ describe('StoryHistoryService', () => {
       'me.userId = :userId',
       { userId: 'alice' },
     );
+    expect(queryBuilder.where).toHaveBeenCalledWith('story.visibility = :published', {
+      published: 'PUBLISHED',
+    });
     expect(queryBuilder.orderBy).toHaveBeenCalledWith('story.finishedAt', 'DESC');
     expect(queryBuilder.skip).toHaveBeenCalledWith(20);
     expect(page).toMatchObject({ page: 2, limit: 20, total: 21 });

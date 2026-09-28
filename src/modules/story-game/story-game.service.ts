@@ -763,6 +763,18 @@ export class StoryGameService {
   }
 
   /**
+   * Un admin quitó la historieta (moderación): si la partida terminada sigue en
+   * Redis (review en vivo, 24 h), se borra para que nadie la siga viendo ni
+   * reaccionando por socket. Las partidas en curso no se tocan.
+   */
+  async discardFinishedStory(gameId: string): Promise<void> {
+    const snapshot = await this.store.get(gameId);
+    if (snapshot?.game.status !== StoryStatus.FINISHED) return;
+    await this.store.delete(gameId);
+    this.logger.log(`story ${gameId} discarded from Redis (removed by an admin)`);
+  }
+
+  /**
    * Manifiesto del review, en REVIEW o FINISHED. Lo puede pedir cualquier
    * participante, incluso si salió de la partida.
    */

@@ -1,4 +1,6 @@
 import { Level } from '@/db/enum/question.enum';
+import { StoryRemovalReason, StoryVisibility } from '@/db/enum/story.enum';
+import { ReviewManifest } from '@/modules/story-game/domain/story-review';
 
 /** Una historieta en el historial del jugador (`GET /story/history`). */
 export interface StoryHistoryItem {
@@ -21,9 +23,65 @@ export interface StoryHistoryItem {
   myScore: number;
 }
 
-/** Página del historial. */
+/** Página del historial o del catálogo. */
 export interface StoryHistoryPage {
   items: StoryHistoryItem[];
+  page: number;
+  limit: number;
+  total: number;
+}
+
+/** Jugador de una historieta, como lo ve el admin (con datos para contactarlo). */
+export interface AdminStoryParticipant {
+  userId: string;
+  /** Nombre cuando jugó. */
+  username: string;
+  /** Nombre y email actuales de la cuenta; null si la cuenta ya no existe. */
+  currentUsername: string | null;
+  email: string | null;
+  avatarUrl: string | null;
+  position: number;
+  panelsWritten: number;
+  totalScore: number;
+  /** Salió de la partida antes de terminar. */
+  left: boolean;
+}
+
+/** Quién quitó la historieta, cuándo y por qué. */
+export interface AdminStoryRemoval {
+  /** ISO 8601. */
+  removedAt: string;
+  /** null si la cuenta del admin ya no existe. */
+  removedBy: { userId: string; username: string } | null;
+  reason: StoryRemovalReason;
+  note: string | null;
+}
+
+/** Una historieta en el panel de admin (`GET /admin/stories`). */
+export interface AdminStoryItem {
+  storyId: string;
+  gameId: string;
+  title: string | null;
+  /** ISO 8601. */
+  finishedAt: string;
+  level: Level;
+  panelsCount: number;
+  excerpt: string;
+  coverImageUrl: string | null;
+  visibility: StoryVisibility;
+  /** Por puesto en el ranking. */
+  participants: AdminStoryParticipant[];
+  /** null si está publicada. */
+  removal: AdminStoryRemoval | null;
+}
+
+/** Detalle para el admin: el resumen más la historieta completa (manifiesto del review). */
+export interface AdminStoryDetail extends AdminStoryItem {
+  manifest: ReviewManifest;
+}
+
+export interface AdminStoryPage {
+  items: AdminStoryItem[];
   page: number;
   limit: number;
   total: number;

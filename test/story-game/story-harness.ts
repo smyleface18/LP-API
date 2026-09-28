@@ -44,6 +44,11 @@ export class InMemoryStoryStore {
     return Promise.resolve(raw ? (JSON.parse(raw) as StorySnapshot) : null);
   }
 
+  delete(gameId: string): Promise<void> {
+    this.games.delete(gameId);
+    return Promise.resolve();
+  }
+
   create(game: StoryGame): Promise<boolean> {
     if (this.games.has(game.gameId)) return Promise.resolve(false);
     this.games.set(game.gameId, JSON.stringify({ game, characters: {}, panels: {} }));

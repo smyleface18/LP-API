@@ -4,7 +4,7 @@ import { StorySnapshot } from '@/modules/story-game/domain/story-game.types';
 import { closedPanels } from '@/modules/story-game/domain/story-turns';
 import { ReviewManifest, toReviewManifest } from '@/modules/story-game/domain/story-review';
 import { AvatarUrls, MediaUrls } from '@/modules/story-game/domain/story-game.views';
-import { StoryHistoryItem } from './story-history.types';
+import { AdminStoryItem, StoryHistoryItem } from './story-history.types';
 
 /** Columnas de una entidad, sin las que pone la base ni las relaciones. */
 type Row<T> = Omit<
@@ -18,6 +18,13 @@ type Row<T> = Omit<
   | 'author'
   | 'panels'
   | 'participants'
+  // Moderación: al guardar, la base la deja publicada y sin datos de remoción.
+  | 'visibility'
+  | 'removedAt'
+  | 'removedBy'
+  | 'removedById'
+  | 'removalReason'
+  | 'removalNote'
 >;
 
 /** Filas a guardar de una historieta terminada. */
@@ -152,5 +159,47 @@ export function toHistoryItem(
     })),
     myPosition: me?.position ?? null,
     myScore: me?.totalScore ?? 0,
+  };
+}
+
+/** Fila del panel de admin: resumen, jugadores con su cuenta y datos de la remoción. */
+export function toAdminStoryItem(
+  story: Story,
+  avatars: AvatarUrls = {},
+  coverImageUrl: string | null = null,
+): AdminStoryItem {
+  const [firstPanel] = [...story.panels].sort(byOrder);
+  return {
+    storyId: story.id,
+    gameId: story.gameId,
+    title: story.title ?? null,
+    finishedAt: story.finishedAt.toISOString(),
+    level: story.level,
+    panelsCount: story.panels.length,
+    excerpt: firstPanel?.finalText ?? '',
+    coverImageUrl,
+    visibility: story.visibility,
+    participants: [...story.participants].sort(byPosition).map((participant) => ({
+      userId: participant.userId,
+      username: participant.username,
+      currentUsername: participant.user?.username ?? null,
+      email: participant.user?.email ?? null,
+      avatarUrl: avatars[participant.userId] ?? null,
+      position: participant.position,
+      panelsWritten: participant.panelsWritten,
+      totalScore: participant.totalScore,
+      left: participant.left,
+    })),
+    removal:
+      story.removedAt && story.removalReason
+        ? {
+            removedAt: story.removedAt.toISOString(),
+            removedBy: story.removedBy
+              ? { userId: story.removedBy.id, username: story.removedBy.username }
+              : null,
+            reason: story.removalReason,
+            note: story.removalNote ?? null,
+          }
+        : null,
   };
 }

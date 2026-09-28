@@ -3,6 +3,8 @@ import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Story, StoryPanel, StoryParticipant } from '@/db/entities';
+import { Level } from '@/db/enum/question.enum';
+import { StoryVisibility } from '@/db/enum/story.enum';
 import {
   PanelReactionEvent,
   STORY_EVENTS,
@@ -82,41 +84,78 @@ export class StoryHistoryService {
     }
   }
 
-  /** Historietas en las que jugó el usuario, de la más reciente a la más vieja. */
+  /**
+   * Historietas en las que jugó el usuario, de la más reciente a la más vieja.
+   * Las que quitó un admin no aparecen.
+   */
   async list(userId: string, page: number, limit: number): Promise<StoryHistoryPage> {
-    const [stories, total] = await this.withDetails()
+    const [stories, total] = await this.detailsQuery()
       .innerJoin('story.participants', 'me', 'me.userId = :userId', { userId })
+      .where('story.visibility = :published', { published: StoryVisibility.PUBLISHED })
       .orderBy('story.finishedAt', 'DESC')
       .skip((page - 1) * limit)
       .take(limit)
       .getManyAndCount();
 
-    const items = await Promise.all(
-      stories.map(async (story) => {
-        const cover = [...story.panels]
-          .sort((a, b) => a.order - b.order)
-          .find((panel) => panel.imageKey);
-        const [avatars, coverUrls] = await Promise.all([
-          this.avatarsOf(story),
-          cover ? this.urls.signMedia({ audioKey: null, imageKey: cover.imageKey }) : null,
-        ]);
-        return toHistoryItem(story, userId, avatars, coverUrls?.imageUrl ?? null);
-      }),
-    );
-    return { items, page, limit, total };
+    return { items: await this.toItems(stories, userId), page, limit, total };
+  }
+
+  /**
+   * Catálogo: todas las historietas publicadas, de cualquier jugador, de la
+   * más reciente a la más vieja. `level` filtra por nivel.
+   */
+  async listCatalog(
+    userId: string,
+    page: number,
+    limit: number,
+    level?: Level,
+  ): Promise<StoryHistoryPage> {
+    const query = this.detailsQuery().where('story.visibility = :published', {
+      published: StoryVisibility.PUBLISHED,
+    });
+    if (level) query.andWhere('story.level = :level', { level });
+
+    const [stories, total] = await query
+      .orderBy('story.finishedAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return { items: await this.toItems(stories, userId), page, limit, total };
   }
 
   /**
    * Manifiesto de una historieta guardada, con el mismo formato que el review.
-   * Solo para sus participantes: a los demás se les responde 404, sin revelar
-   * que existe.
+   * Solo para sus participantes, y solo si sigue publicada: a los demás se les
+   * responde 404, sin revelar que existe.
    */
   async get(storyId: string, userId: string): Promise<ReviewManifest> {
-    const story = await this.withDetails().where('story.id = :storyId', { storyId }).getOne();
+    const story = await this.findPublished(storyId);
     if (!story || !story.participants.some((participant) => participant.userId === userId)) {
       throw new NotFoundException('Story not found');
     }
+    return this.manifestOf(story);
+  }
 
+  /** Manifiesto de una historieta del catálogo (cualquier usuario); 404 si no está publicada. */
+  async getFromCatalog(storyId: string): Promise<ReviewManifest> {
+    const story = await this.findPublished(storyId);
+    if (!story) throw new NotFoundException('Story not found');
+    return this.manifestOf(story);
+  }
+
+  /** Historieta con sus viñetas y participantes (y la cuenta y el avatar actual de cada uno). */
+  detailsQuery() {
+    return this.stories
+      .createQueryBuilder('story')
+      .leftJoinAndSelect('story.panels', 'panel')
+      .leftJoinAndSelect('story.participants', 'participant')
+      .leftJoinAndSelect('participant.user', 'user')
+      .leftJoinAndSelect('user.avatar', 'avatar');
+  }
+
+  /** Manifiesto con las URLs firmadas de avatares y media. */
+  async manifestOf(story: Story): Promise<ReviewManifest> {
     const [avatars, media] = await Promise.all([
       this.avatarsOf(story),
       this.urls.mediaFor(
@@ -129,22 +168,41 @@ export class StoryHistoryService {
     return toStoryManifest(story, avatars, media);
   }
 
-  /** Historieta con sus viñetas y participantes (y el avatar actual de cada uno). */
-  private withDetails() {
-    return this.stories
-      .createQueryBuilder('story')
-      .leftJoinAndSelect('story.panels', 'panel')
-      .leftJoinAndSelect('story.participants', 'participant')
-      .leftJoinAndSelect('participant.user', 'user')
-      .leftJoinAndSelect('user.avatar', 'avatar');
-  }
-
-  private avatarsOf(story: Story): Promise<AvatarUrls> {
+  avatarsOf(story: Story): Promise<AvatarUrls> {
     return this.urls.avatarsFor(
       story.participants.map((participant) => ({
         userId: participant.userId,
         avatarKey: participant.user?.avatar?.key ?? null,
       })),
+    );
+  }
+
+  /** Imagen firmada de la primera viñeta que tenga una; null si ninguna. */
+  async coverUrlOf(story: Story): Promise<string | null> {
+    const cover = [...story.panels]
+      .sort((a, b) => a.order - b.order)
+      .find((panel) => panel.imageKey);
+    if (!cover) return null;
+    const { imageUrl } = await this.urls.signMedia({ audioKey: null, imageKey: cover.imageKey });
+    return imageUrl;
+  }
+
+  private findPublished(storyId: string): Promise<Story | null> {
+    return this.detailsQuery()
+      .where('story.id = :storyId', { storyId })
+      .andWhere('story.visibility = :published', { published: StoryVisibility.PUBLISHED })
+      .getOne();
+  }
+
+  private toItems(stories: Story[], userId: string) {
+    return Promise.all(
+      stories.map(async (story) => {
+        const [avatars, coverUrl] = await Promise.all([
+          this.avatarsOf(story),
+          this.coverUrlOf(story),
+        ]);
+        return toHistoryItem(story, userId, avatars, coverUrl);
+      }),
     );
   }
 }

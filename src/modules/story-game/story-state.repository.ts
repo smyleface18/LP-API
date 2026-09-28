@@ -170,6 +170,15 @@ export class StoryStateRepository {
     return { game: deserializeGame(gameId, rawGame), characters, panels };
   }
 
+  /** Borra la partida (hash, elenco y viñetas). La referencia usuario → partida se limpia aparte. */
+  async delete(gameId: string): Promise<void> {
+    await this.redis.del([
+      StoryStateRepository.gameKey(gameId),
+      StoryStateRepository.charactersKey(gameId),
+      StoryStateRepository.panelsKey(gameId),
+    ]);
+  }
+
   /** Crea la partida solo si no existe otra con ese id. Devuelve false si ya existía. */
   async create(game: StoryGame): Promise<boolean> {
     const fields = serializeGame(game).set.flat();
