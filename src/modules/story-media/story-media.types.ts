@@ -23,6 +23,7 @@ export interface GeneratedImage {
 /** Lo que hace falta para dibujar una viñeta. */
 export interface PanelImageInput {
   /** Semilla estable por historieta: ayuda a que las viñetas compartan estilo. */
+  /** Semilla estable por partida, para proveedores que la admitan (FLUX en Workers AI no). */
   seed: number;
   scene: string;
   text: string;

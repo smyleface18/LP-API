@@ -28,7 +28,7 @@ No sabe nada de la partida: lo usa `StoryMediaProcessor` (cola `story-media`, en
 Keys de S3: `story/{storyId}/panel-{order}.mp3` y `.jpg` o `.png` según el tipo de la imagen.
 
 - **Narración**: se narra `finalText` (el texto corregido) con la voz `POLLY_VOICE_ID` y el idioma de la partida (`config.language`). Polly da los offsets de las speech marks en **bytes UTF-8**; `parseSpeechMarks` los pasa a índices del string (con tildes o emojis no coinciden), que es lo que usa el cliente para resaltar la palabra que se está leyendo.
-- **Imagen**: el prompt repite el estilo (que pide una ilustración sin texto ni globos: "wordless illustration, no text, no speech bubbles") y las fichas de los personajes en todas las viñetas, y la semilla (`seedForGame`, derivada del `gameId`) es la misma para toda la historieta, para que parezcan una sola.
+- **Imagen**: el prompt repite el estilo (que pide una ilustración sin texto ni globos: "wordless illustration, no text, no speech bubbles") y las fichas de los personajes en todas las viñetas, para que parezcan una sola historieta. `seedForGame` (derivada del `gameId`) queda disponible para proveedores que admitan semilla; FLUX.1 schnell en Workers AI no la admite.
 - **Largo del prompt**: cada parte tiene su tope (`PROMPT_MAX_SCENE_CHARS` = 200, `PROMPT_MAX_CHARACTER_CHARS` = 168 por ficha, `PROMPT_MAX_CHARACTERS` = 3), iguales a los límites del borrador. En el peor caso estilo + escenario + fichas ocupan 911 caracteres, así que el recorte a 1024 nunca corta las fichas: solo se recorta la acción (le quedan al menos 112).
 - **Reintentos de la imagen**, según el tipo de error (`ImageGenerationError.kind`):
 
@@ -70,20 +70,20 @@ La documentación de Cloudflare pide los dos permisos (Read y Edit) para ejecuta
 
 Revisados contra la documentación oficial (página del modelo `flux-1-schnell` y "Get started → REST API") en septiembre de 2026:
 
-- **Petición**: `POST https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_IMAGE_MODEL}` con `Authorization: Bearer {CF_API_TOKEN}` y un JSON `{ prompt, seed, steps }`.
+- **Petición**: `POST https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/run/{CF_IMAGE_MODEL}` con `Authorization: Bearer {CF_API_TOKEN}` y un JSON `{ prompt, steps }`.
   - `prompt`: 1 a 2048 caracteres (el nuestro se recorta a `IMAGE_PROMPT_MAX_CHARS` = 1024).
   - `steps`: por defecto 4, máximo 8. Se manda 4 (`CF_IMAGE_STEPS`).
-  - `seed`: entero. La documentación no da el rango; `seedForGame` devuelve 0 a 858993459.
+  - **Sin `seed`**: la página del modelo la muestra en un ejemplo, pero el esquema real (`GET /accounts/{id}/ai/models/schema?model=@cf/black-forest-labs/flux-1-schnell`, verificado el 28/09/2026) solo tiene `prompt` y `steps`, con `additionalProperties: false`. Mandar `seed` da `400 Bad input: Additional or unevaluated properties '/seed'`, y como es un 400 no se reintenta.
   - **Tamaño**: FLUX.1 schnell no documenta `width`/`height`, así que no se mandan y se usa el tamaño por defecto del modelo (cuadrado). Antes, con Nova Canvas, era 1024×768.
   - **Sin prompt negativo**: el modelo no lo admite. Por eso se quitó `PANEL_NEGATIVE_PROMPT`, y el "sin texto ni globos" va en el prompt (`PANEL_STYLE`).
 - **Respuesta**: el sobre estándar de la API de Cloudflare, `{ result, success, errors, messages }`; para este modelo `result.image` es la imagen en **base64**. Ejemplos oficiales la tratan como **JPEG**, pero la página no lo fija: el tipo se detecta por los primeros bytes (JPEG o PNG) y un formato desconocido cuenta como error.
 - **Errores**: HTTP no 2xx, o `success: false`, se consideran fallo; el mensaje se arma con `errors[].message` y el `kind` sale del código HTTP (ver Reintentos). Se asume que la cuota superada llega como 429 y que un `success: false` con HTTP 200 no se arregla reintentando (`permanent`). Una respuesta 200 sin imagen se trata como `permanent`: con la misma semilla y el mismo prompt se espera el mismo resultado.
-- **Modelo configurable**: con otro `CF_IMAGE_MODEL` se asume la misma entrada (`prompt`, `seed`, `steps`) y la misma salida (`result.image` en base64). No se verificó con otros modelos de imagen de Workers AI; alguno podría responder con la imagen en binario en vez de JSON, y entonces haría falta adaptar el adaptador.
+- **Modelo configurable**: con otro `CF_IMAGE_MODEL` se asume la misma entrada (`prompt`, `steps`) y la misma salida (`result.image` en base64). No se verificó con otros modelos de imagen de Workers AI; alguno podría responder con la imagen en binario en vez de JSON, y entonces haría falta adaptar el adaptador.
 
 ## Pruebas
 
 - `story-media.service.spec.ts`: audio e imagen por separado, keys de S3 (`.png`/`.jpg`), semilla por partida, `imageStatus` (`ready`, `none`, `failed`), reintentos según el error (`transient` con backoff hasta 3 intentos, `permanent` y 429 sin reintento, `rateLimited`) y errores de S3.
-- `cloudflare-image.generator.spec.ts` (`fetch` mockeado): petición (URL, token, `prompt`/`seed`/`steps`), imagen JPEG y PNG, `kind` de cada error HTTP (400/401/403/404, 429, 5xx, con y sin JSON), respuesta sin imagen o con formato desconocido, error de red y timeout.
+- `cloudflare-image.generator.spec.ts` (`fetch` mockeado): petición (URL, token, solo `prompt` y `steps`), imagen JPEG y PNG, `kind` de cada error HTTP (400/401/403/404, 429, 5xx, con y sin JSON), respuesta sin imagen o con formato desconocido, error de red y timeout.
 - `image-generator.factory.spec.ts`: `none` por defecto, `cloudflare` con el modelo por defecto o `CF_IMAGE_MODEL`, `IMAGE_TIMEOUT_MS` (por defecto e inválido), variables faltantes y proveedor desconocido.
 - `polly-speech.service.spec.ts`: las dos llamadas a Polly (voz neural, mp3 y speech marks) y el `null` si falla.
 - `speech-marks.parser.spec.ts`: marcas `word`, offsets con tildes y líneas inválidas.

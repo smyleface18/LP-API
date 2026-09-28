@@ -43,8 +43,11 @@ function imageTypeOf(bytes: Uint8Array): string | null {
 
 /**
  * Dibujo de las viñetas con Cloudflare Workers AI (API REST, `POST
- * /accounts/{id}/ai/run/{model}`). Una imagen por viñeta, con la semilla de la
- * partida para que el estilo se mantenga entre viñetas.
+ * /accounts/{id}/ai/run/{model}`). Una imagen por viñeta.
+ *
+ * FLUX.1 schnell solo acepta `prompt` y `steps` (`additionalProperties: false`
+ * en su esquema): no admite semilla, así que `input.seed` no se manda. El
+ * estilo entre viñetas lo sostienen el estilo fijo y las fichas del prompt.
  *
  * Lanza un `ImageGenerationError` si la API falla, responde sin imagen o tarda
  * más de `timeoutMs`; su `kind` decide si `StoryMediaService` reintenta.
@@ -69,7 +72,6 @@ export class CloudflareImageGenerator extends ImageGenerator {
         headers: { Authorization: `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: buildPanelImagePrompt(input),
-          seed: input.seed,
           steps: CF_IMAGE_STEPS,
         }),
         signal: controller.signal,

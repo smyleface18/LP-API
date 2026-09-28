@@ -65,7 +65,7 @@ describe('CloudflareImageGenerator', () => {
 
   afterEach(() => jest.useRealTimers());
 
-  it('posts the prompt, seed and steps to the model and decodes the base64 image', async () => {
+  it('posts only the prompt and steps (the model rejects any other field) and decodes the image', async () => {
     fetchFn.mockResolvedValue(ok(JPEG));
 
     const result = await generator.generate(INPUT);
@@ -79,7 +79,6 @@ describe('CloudflareImageGenerator', () => {
     expect(init.headers).toMatchObject({ Authorization: 'Bearer token-abc' });
     expect(JSON.parse(init.body as string)).toEqual({
       prompt: buildPanelImagePrompt(INPUT),
-      seed: 42,
       steps: CF_IMAGE_STEPS,
     });
   });
