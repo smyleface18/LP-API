@@ -15,6 +15,7 @@ import { PanelGuardError, StoryChanges, StoryStateRepository } from './story-sta
 import { StoryError } from './domain/story-game.errors';
 import { StoryUrlSigner } from './story-url-signer.service';
 import {
+  PanelImageRegeneratedEvent,
   PanelMediaRequestEvent,
   ProcessingStartedEvent,
   STORY_EVENTS,
@@ -760,6 +761,33 @@ export class StoryGameService {
       this.logger.log(`story ${gameId} finished`);
       return { game };
     });
+  }
+
+  /**
+   * Una imagen regenerada por un admin: si la partida terminada sigue en Redis
+   * (review en vivo, 24 h), se guarda en su viñeta y la sala la recibe por
+   * `panelMediaReady`. Si ya no está, no hace nada (el historial la guarda).
+   */
+  @OnEvent(STORY_EVENTS.panelImageRegenerated, { async: true, promisify: true })
+  async onPanelImageRegenerated({ gameId, order, image }: PanelImageRegeneratedEvent) {
+    if (image.imageStatus !== 'ready' || !image.imageKey) return;
+    try {
+      if (!(await this.store.get(gameId))) return;
+      await this.mutate(gameId, (snapshot, outbox) => {
+        const panel = snapshot.panels[order];
+        if (snapshot.game.status !== StoryStatus.FINISHED || !panel?.media) return null;
+        panel.media = { ...panel.media, imageStatus: 'ready', imageKey: image.imageKey };
+        outbox.push({
+          event: STORY_EVENTS.panelMediaReady,
+          payload: { gameId, order, media: panel.media },
+        });
+        return { setPanels: [panel] };
+      });
+    } catch (error) {
+      this.logger.warn(
+        `story ${gameId}: could not apply a regenerated image: ${(error as Error).message}`,
+      );
+    }
   }
 
   /**

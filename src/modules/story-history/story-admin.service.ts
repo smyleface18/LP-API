@@ -1,9 +1,15 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EntityManager, Repository } from 'typeorm';
 import { Story, StoryModerationLog } from '@/db/entities';
 import { StoryModerationAction, StoryRemovalReason, StoryVisibility } from '@/db/enum/story.enum';
 import { StoryGameService } from '@/modules/story-game/story-game.service';
+import {
+  ImageRegenerationRequestedEvent,
+  PanelMediaRequestEvent,
+  STORY_EVENTS,
+} from '@/modules/story-game/domain/story-game.events';
 import { StoryHistoryService } from './story-history.service';
 import { toAdminStoryItem } from './story-history.mapper';
 import { whereStoryMatches } from './story-search';
@@ -38,6 +44,7 @@ export class StoryAdminService {
     private readonly moderationLog: Repository<StoryModerationLog>,
     private readonly history: StoryHistoryService,
     private readonly game: StoryGameService,
+    private readonly events: EventEmitter2,
   ) {}
 
   /**
@@ -141,6 +148,40 @@ export class StoryAdminService {
 
     this.logger.warn(`story ${storyId} (game ${story.gameId}) restored by ${adminId}`);
     return this.get(storyId);
+  }
+
+  /**
+   * Vuelve a dibujar las viñetas con texto que quedaron sin imagen (el
+   * proveedor falló o venció el plazo). Cada una va a la cola `story-media`
+   * como `panel-image-regen`, con los mismos reintentos; al terminar, el
+   * historial guarda la imagen. Devuelve cuáles se pidieron (vacío si no falta ninguna).
+   */
+  async regenerateMissingImages(storyId: string): Promise<{ queued: number; orders: number[] }> {
+    const story = await this.findOrFail(storyId);
+    const characters = new Map(story.characters.map((character) => [character.id, character]));
+
+    const panels: PanelMediaRequestEvent[] = [...story.panels]
+      .filter((panel) => !!panel.originalText && !panel.imageKey)
+      .sort((a, b) => a.order - b.order)
+      .map((panel) => ({
+        gameId: story.gameId,
+        storyId: story.id,
+        order: panel.order,
+        text: panel.finalText,
+        scene: panel.scene,
+        characters: panel.characterIds
+          .map((id) => characters.get(id))
+          .filter((character) => !!character)
+          .map(({ name, kind, description }) => ({ name, kind, description })),
+        languageCode: story.language,
+      }));
+
+    if (panels.length > 0) {
+      const event: ImageRegenerationRequestedEvent = { gameId: story.gameId, panels };
+      await this.events.emitAsync(STORY_EVENTS.imageRegenerationRequested, event);
+      this.logger.log(`story ${storyId}: regenerating ${panels.length} images`);
+    }
+    return { queued: panels.length, orders: panels.map((panel) => panel.order) };
   }
 
   /**

@@ -1,9 +1,14 @@
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { StoryMediaService } from '@/modules/story-media/story-media.service';
 import { StoryGameService } from '../story-game.service';
-import { PanelMediaRequestEvent } from '../domain/story-game.events';
+import {
+  PanelImageRegeneratedEvent,
+  PanelMediaRequestEvent,
+  STORY_EVENTS,
+} from '../domain/story-game.events';
 import { STORY_MEDIA_CONCURRENCY, STORY_MEDIA_QUEUE, StoryMediaJobName } from './type';
 
 /**
@@ -11,6 +16,8 @@ import { STORY_MEDIA_CONCURRENCY, STORY_MEDIA_QUEUE, StoryMediaJobName } from '.
  * - `panel-audio`: narra la viñeta y le pasa el resultado a `onPanelAudio`.
  * - `panel-image`: si la imagen sigue pendiente (no venció el plazo ni hubo
  *   un 429 en la historieta), la dibuja y le pasa el resultado a `onPanelImage`.
+ * - `panel-image-regen`: vuelve a dibujar una viñeta de una historieta
+ *   terminada y emite `panelImageRegenerated` (lo guarda el historial).
  */
 @Processor(STORY_MEDIA_QUEUE, { concurrency: STORY_MEDIA_CONCURRENCY })
 export class StoryMediaProcessor extends WorkerHost {
@@ -19,6 +26,7 @@ export class StoryMediaProcessor extends WorkerHost {
   constructor(
     private readonly media: StoryMediaService,
     private readonly storyGameService: StoryGameService,
+    private readonly events: EventEmitter2,
   ) {
     super();
   }
@@ -26,6 +34,18 @@ export class StoryMediaProcessor extends WorkerHost {
   async process(job: Job<PanelMediaRequestEvent, void, StoryMediaJobName>) {
     const request = job.data;
     const { gameId, order } = request;
+
+    if (job.name === 'panel-image-regen') {
+      const image = await this.media.generateImage(request);
+      const event: PanelImageRegeneratedEvent = {
+        gameId,
+        storyId: request.storyId,
+        order,
+        image,
+      };
+      await this.events.emitAsync(STORY_EVENTS.panelImageRegenerated, event);
+      return;
+    }
 
     if (job.name === 'panel-image') {
       if (!(await this.storyGameService.isImagePending(gameId, order))) return;

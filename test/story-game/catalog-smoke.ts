@@ -5,6 +5,7 @@
  *   npx ts-node -r tsconfig-paths/register test/story-game/catalog-smoke.ts
  */
 import 'reflect-metadata';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AppDataSource } from '@/db/data-source';
 import { Story, StoryModerationLog } from '@/db/entities';
 import { StoryVisibility } from '@/db/enum/story.enum';
@@ -29,6 +30,7 @@ async function main() {
       AppDataSource.getRepository(StoryModerationLog),
       history,
       {} as StoryGameService,
+      new EventEmitter2(),
     );
 
     const catalog = await history.listCatalog('nobody', 1, 5);

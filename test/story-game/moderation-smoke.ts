@@ -5,6 +5,7 @@
  *   npx ts-node -r tsconfig-paths/register test/story-game/moderation-smoke.ts
  */
 import 'reflect-metadata';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AppDataSource } from '@/db/data-source';
 import { Story, StoryModerationLog, User } from '@/db/entities';
 import { StoryRemovalReason, StoryVisibility } from '@/db/enum/story.enum';
@@ -34,6 +35,7 @@ async function main() {
       runner.manager.getRepository(StoryModerationLog),
       history,
       game,
+      new EventEmitter2(),
     );
 
     const target = await stories.findOne({ where: { visibility: StoryVisibility.PUBLISHED } });

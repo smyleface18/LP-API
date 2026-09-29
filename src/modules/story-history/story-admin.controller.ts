@@ -46,6 +46,16 @@ export class StoryAdminController {
     return this.admin.remove(storyId, admin.username, dto.reason, dto.note);
   }
 
+  /**
+   * `POST /admin/stories/:storyId/regenerate-images`: vuelve a dibujar las
+   * viñetas que quedaron sin imagen. Responde `{ queued, orders }` enseguida;
+   * las imágenes llegan en unos segundos (o hasta ~3 min si el proveedor está lento).
+   */
+  @Post(':storyId/regenerate-images')
+  regenerateImages(@Param('storyId', ParseUUIDPipe) storyId: string) {
+    return this.admin.regenerateMissingImages(storyId);
+  }
+
   /** `POST /admin/stories/:storyId/restore` `{ note? }`: la vuelve a publicar. */
   @Post(':storyId/restore')
   restore(

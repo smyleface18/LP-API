@@ -3,6 +3,7 @@ import { StoryReaction } from '../story-game.config';
 import {
   AuthorStatus,
   CharacterSheet,
+  PanelImageResult,
   PanelMedia,
   PanelConfirmedBy,
   PanelScore,
@@ -37,6 +38,13 @@ export const STORY_EVENTS = {
   panelMediaReady: 'story.panel-media-ready',
   /** Entró a FINISHED: se guarda en Postgres (Fase 4c). */
   finished: 'story.finished',
+  /**
+   * Un admin pidió volver a dibujar las viñetas sin imagen de una historieta
+   * terminada: la cola `story-media` crea una tarea `panel-image-regen` por cada una.
+   */
+  imageRegenerationRequested: 'story.image-regeneration-requested',
+  /** Terminó una de esas tareas: se guarda en Postgres (y en Redis si sigue ahí). */
+  panelImageRegenerated: 'story.panel-image-regenerated',
 } as const;
 
 /** Resumen de una viñeta confirmada, tal como la ven todos durante la partida. */
@@ -152,6 +160,18 @@ export interface PanelMediaReadyEvent {
 
 export interface StoryFinishedEvent {
   snapshot: StorySnapshot;
+}
+
+export interface ImageRegenerationRequestedEvent {
+  gameId: string;
+  panels: PanelMediaRequestEvent[];
+}
+
+export interface PanelImageRegeneratedEvent {
+  gameId: string;
+  storyId: string;
+  order: number;
+  image: PanelImageResult;
 }
 
 export type StoryOutboxItem =

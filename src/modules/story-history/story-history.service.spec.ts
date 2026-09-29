@@ -69,7 +69,13 @@ const snapshot = (storyId: string | null = 'story-1'): StorySnapshot =>
   }) as unknown as StorySnapshot;
 
 describe('StoryHistoryService', () => {
-  let manager: { exists: jest.Mock; insert: jest.Mock; transaction: jest.Mock; query: jest.Mock };
+  let manager: {
+    exists: jest.Mock;
+    insert: jest.Mock;
+    transaction: jest.Mock;
+    query: jest.Mock;
+    update: jest.Mock;
+  };
   let queryBuilder: Record<string, jest.Mock>;
   let urls: { avatarsFor: jest.Mock; mediaFor: jest.Mock; signMedia: jest.Mock };
   let service: StoryHistoryService;
@@ -80,6 +86,7 @@ describe('StoryHistoryService', () => {
       insert: jest.fn().mockResolvedValue(undefined),
       transaction: jest.fn(),
       query: jest.fn().mockResolvedValue(undefined),
+      update: jest.fn().mockResolvedValue(undefined),
     };
     manager.transaction.mockImplementation((fn: (m: typeof manager) => unknown) => fn(manager));
     queryBuilder = {};
@@ -139,6 +146,42 @@ describe('StoryHistoryService', () => {
     it('never throws out of the finished listener', async () => {
       manager.transaction.mockRejectedValue(new Error('db down'));
       await expect(service.onStoryFinished({ snapshot: snapshot() })).resolves.toBeUndefined();
+    });
+  });
+
+  describe('regenerated images', () => {
+    it('stores the new image key in the panel', async () => {
+      await service.onPanelImageRegenerated({
+        gameId: 'g1',
+        storyId: 'story-1',
+        order: 2,
+        image: { imageStatus: 'ready', imageKey: 'story/story-1/panel-2.jpg' },
+      });
+      expect(manager.update).toHaveBeenCalledWith(
+        StoryPanel,
+        { storyId: 'story-1', order: 2 },
+        { imageKey: 'story/story-1/panel-2.jpg' },
+      );
+    });
+
+    it('leaves the panel as it was when the image failed again, and never throws', async () => {
+      await service.onPanelImageRegenerated({
+        gameId: 'g1',
+        storyId: 'story-1',
+        order: 2,
+        image: { imageStatus: 'failed', imageKey: null },
+      });
+      expect(manager.update).not.toHaveBeenCalled();
+
+      manager.update.mockRejectedValue(new Error('db down'));
+      await expect(
+        service.onPanelImageRegenerated({
+          gameId: 'g1',
+          storyId: 'story-1',
+          order: 2,
+          image: { imageStatus: 'ready', imageKey: 'k.jpg' },
+        }),
+      ).resolves.toBeUndefined();
     });
   });
 

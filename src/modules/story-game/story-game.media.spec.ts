@@ -345,6 +345,54 @@ describe('StoryGameService — story media (phase 4b)', () => {
     expect((await mediaOf(gameId, 1))?.imageStatus).toBe('failed');
   });
 
+  describe('regenerated images', () => {
+    async function finishedWithoutImage(gameId: string) {
+      await service.onPanelAudio(gameId, 0, audio(0));
+      await service.onPanelImage(gameId, 0, IMAGE_FAILED);
+      await completeMedia(gameId, [1, 2]);
+      expect(await status(gameId)).toBe(StoryStatus.FINISHED);
+    }
+
+    it('puts the regenerated image in the live review and sends it to the room', async () => {
+      const gameId = await storyInProcessing();
+      await finishedWithoutImage(gameId);
+      const { storyId } = await h.gameOf(gameId);
+
+      await service.onPanelImageRegenerated({
+        gameId,
+        storyId: storyId!,
+        order: 0,
+        image: image(0),
+      });
+
+      expect(await mediaOf(gameId, 0)).toMatchObject({ status: 'ready', ...image(0) });
+      const last = h.emitted<PanelMediaReadyEvent>(STORY_EVENTS.panelMediaReady).at(-1);
+      expect(last).toMatchObject({ gameId, order: 0, media: { imageStatus: 'ready' } });
+    });
+
+    it('ignores a failed image, and games that are no longer in Redis', async () => {
+      const gameId = await storyInProcessing();
+      await finishedWithoutImage(gameId);
+      const sent = h.emitted(STORY_EVENTS.panelMediaReady).length;
+
+      await service.onPanelImageRegenerated({
+        gameId,
+        storyId: 's',
+        order: 0,
+        image: IMAGE_FAILED,
+      });
+      await service.onPanelImageRegenerated({
+        gameId: 'gone',
+        storyId: 's',
+        order: 0,
+        image: image(0),
+      });
+
+      expect((await mediaOf(gameId, 0))?.imageStatus).toBe('failed');
+      expect(h.emitted(STORY_EVENTS.panelMediaReady)).toHaveLength(sent);
+    });
+  });
+
   describe('title', () => {
     it('asks the AI for a title with the final text of each panel and the cast', async () => {
       const gameId = await storyInProcessing();

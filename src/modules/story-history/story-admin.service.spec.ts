@@ -1,5 +1,6 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Repository } from 'typeorm';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Story, StoryModerationLog } from '@/db/entities';
 import { StoryRemovalReason, StoryVisibility } from '@/db/enum/story.enum';
 import { StoryGameService } from '@/modules/story-game/story-game.service';
@@ -41,6 +42,7 @@ describe('StoryAdminService', () => {
   let game: { discardFinishedStory: jest.Mock };
   let tx: { createQueryBuilder: jest.Mock; insert: jest.Mock };
   let moderationLog: { find: jest.Mock };
+  let events: { emitAsync: jest.Mock };
   let service: StoryAdminService;
 
   beforeEach(() => {
@@ -83,11 +85,13 @@ describe('StoryAdminService', () => {
         },
       ]),
     };
+    events = { emitAsync: jest.fn().mockResolvedValue([]) };
     service = new StoryAdminService(
       stories as unknown as Repository<Story>,
       moderationLog as unknown as Repository<StoryModerationLog>,
       history as unknown as StoryHistoryService,
       game as unknown as StoryGameService,
+      events as unknown as EventEmitter2,
     );
   });
 
@@ -274,6 +278,77 @@ describe('StoryAdminService', () => {
     it('answers 404 for an unknown story', async () => {
       queryBuilder.getOne.mockResolvedValue(null);
       await expect(service.restore('missing', 'admin-2')).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  describe('regenerateMissingImages', () => {
+    const panelRow = (order: number, overrides: object = {}) => ({
+      order,
+      originalText: `Text ${order}`,
+      finalText: `Final ${order}`,
+      scene: `Scene ${order}`,
+      characterIds: ['ch-0-0'],
+      imageKey: null,
+      ...overrides,
+    });
+
+    it('asks to redraw the panels with text that have no image, with their cast', async () => {
+      queryBuilder.getOne.mockResolvedValue(
+        story({
+          language: 'en-US',
+          characters: [
+            {
+              id: 'ch-0-0',
+              name: 'Beep',
+              kind: 'robot',
+              description: 'tiny silver robot',
+              createdBy: 'alice',
+              introducedInPanel: 0,
+            },
+          ],
+          panels: [
+            panelRow(2),
+            panelRow(0, { imageKey: 'story/s/panel-0.jpg' }),
+            panelRow(1, { originalText: '' }),
+            panelRow(3, { characterIds: [] }),
+          ],
+        } as never),
+      );
+
+      expect(await service.regenerateMissingImages('story-1')).toEqual({
+        queued: 2,
+        orders: [2, 3],
+      });
+      expect(events.emitAsync).toHaveBeenCalledWith('story.image-regeneration-requested', {
+        gameId: 'g1',
+        panels: [
+          {
+            gameId: 'g1',
+            storyId: 'story-1',
+            order: 2,
+            text: 'Final 2',
+            scene: 'Scene 2',
+            characters: [{ name: 'Beep', kind: 'robot', description: 'tiny silver robot' }],
+            languageCode: 'en-US',
+          },
+          expect.objectContaining({ order: 3, characters: [] }),
+        ],
+      });
+    });
+
+    it('does nothing when every panel already has its image', async () => {
+      queryBuilder.getOne.mockResolvedValue(
+        story({ characters: [], panels: [panelRow(0, { imageKey: 'k.jpg' })] } as never),
+      );
+      expect(await service.regenerateMissingImages('story-1')).toEqual({ queued: 0, orders: [] });
+      expect(events.emitAsync).not.toHaveBeenCalled();
+    });
+
+    it('answers 404 for an unknown story', async () => {
+      queryBuilder.getOne.mockResolvedValue(null);
+      await expect(service.regenerateMissingImages('missing')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 });

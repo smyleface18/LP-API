@@ -1,4 +1,5 @@
 import { Job, Queue } from 'bullmq';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { StoryMediaService } from '@/modules/story-media/story-media.service';
 import { StoryGameService } from '../story-game.service';
 import { PanelMediaRequestEvent } from '../domain/story-game.events';
@@ -39,6 +40,20 @@ describe('StoryMediaQueue', () => {
     expect(jobs[0].data).toEqual(panel(0));
   });
 
+  it('queues a regeneration per panel, after the games in progress', async () => {
+    const queue = { addBulk: jest.fn().mockResolvedValue([]) };
+    await new StoryMediaQueue(queue as unknown as Queue).enqueueRegeneration({
+      gameId: 'g1',
+      panels: [panel(1), panel(3)],
+    });
+
+    const [jobs] = queue.addBulk.mock.calls[0] as [QueuedJob[]];
+    expect(jobs.map((job) => [job.name, job.opts.jobId, job.opts.priority])).toEqual([
+      ['panel-image-regen', 'g1__regen__1', 3],
+      ['panel-image-regen', 'g1__regen__3', 3],
+    ]);
+  });
+
   it('does not throw when Redis is down (the deadline finishes the story)', async () => {
     const queue = { addBulk: jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) };
     await expect(
@@ -52,6 +67,7 @@ describe('StoryMediaProcessor', () => {
   const IMAGE = { imageStatus: 'ready', imageKey: 'i.jpg' };
   let media: { generateAudio: jest.Mock; generateImage: jest.Mock };
   let game: { onPanelAudio: jest.Mock; onPanelImage: jest.Mock; isImagePending: jest.Mock };
+  let events: { emitAsync: jest.Mock };
   let processor: StoryMediaProcessor;
 
   const job = (name: StoryMediaJobName, order: number) =>
@@ -67,9 +83,11 @@ describe('StoryMediaProcessor', () => {
       onPanelImage: jest.fn().mockResolvedValue(undefined),
       isImagePending: jest.fn().mockResolvedValue(true),
     };
+    events = { emitAsync: jest.fn().mockResolvedValue([]) };
     processor = new StoryMediaProcessor(
       media as unknown as StoryMediaService,
       game as unknown as StoryGameService,
+      events as unknown as EventEmitter2,
     );
   });
 
@@ -85,6 +103,19 @@ describe('StoryMediaProcessor', () => {
     expect(game.isImagePending).toHaveBeenCalledWith('g1', 2);
     expect(media.generateImage).toHaveBeenCalledWith(panel(2));
     expect(game.onPanelImage).toHaveBeenCalledWith('g1', 2, IMAGE);
+  });
+
+  it('redraws a panel of a finished story and announces the result (no game state involved)', async () => {
+    await processor.process(job('panel-image-regen', 2));
+    expect(game.isImagePending).not.toHaveBeenCalled();
+    expect(media.generateImage).toHaveBeenCalledWith(panel(2));
+    expect(game.onPanelImage).not.toHaveBeenCalled();
+    expect(events.emitAsync).toHaveBeenCalledWith('story.panel-image-regenerated', {
+      gameId: 'g1',
+      storyId: 's1',
+      order: 2,
+      image: IMAGE,
+    });
   });
 
   it('does not call the provider when the image is no longer pending (429 or deadline)', async () => {

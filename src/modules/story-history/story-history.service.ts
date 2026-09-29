@@ -6,6 +6,7 @@ import { Story, StoryPanel, StoryParticipant } from '@/db/entities';
 import { Level } from '@/db/enum/question.enum';
 import { StoryVisibility } from '@/db/enum/story.enum';
 import {
+  PanelImageRegeneratedEvent,
   PanelReactionEvent,
   STORY_EVENTS,
   StoryFinishedEvent,
@@ -82,6 +83,34 @@ export class StoryHistoryService {
       );
     } catch (error) {
       this.logger.warn(`story ${gameId}: could not save a reaction: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Una imagen regenerada por un admin: se guarda la key de S3 en la viñeta.
+   * Si no se pudo dibujar, la viñeta sigue sin imagen (se puede volver a pedir).
+   */
+  @OnEvent(STORY_EVENTS.panelImageRegenerated, { async: true, promisify: true })
+  async onPanelImageRegenerated({
+    storyId,
+    order,
+    image,
+  }: PanelImageRegeneratedEvent): Promise<void> {
+    if (image.imageStatus !== 'ready' || !image.imageKey) {
+      this.logger.warn(`story ${storyId}: panel ${order} image could not be regenerated`);
+      return;
+    }
+    try {
+      await this.stories.manager.update(
+        StoryPanel,
+        { storyId, order },
+        { imageKey: image.imageKey },
+      );
+      this.logger.log(`story ${storyId}: panel ${order} image regenerated`);
+    } catch (error) {
+      this.logger.error(
+        `story ${storyId}: could not save a regenerated image: ${(error as Error).message}`,
+      );
     }
   }
 

@@ -37,12 +37,21 @@ export function storyJobId(job: StoryJob): string {
 /** Cola de la media de las viñetas: una tarea de audio y una de imagen por viñeta. */
 export const STORY_MEDIA_QUEUE = 'story-media';
 
-export type StoryMediaJobName = 'panel-audio' | 'panel-image';
+/**
+ * - `panel-audio` / `panel-image`: la media de una partida que termina.
+ * - `panel-image-regen`: volver a dibujar una viñeta de una historieta ya
+ *   terminada (lo pide un admin).
+ */
+export type StoryMediaJobName = 'panel-audio' | 'panel-image' | 'panel-image-regen';
 
-/** Prioridad en BullMQ (menor = antes): los audios salen antes que las imágenes. */
+/**
+ * Prioridad en BullMQ (menor = antes): los audios salen antes que las
+ * imágenes, y las regeneraciones al final, para no demorar a las partidas en curso.
+ */
 export const STORY_MEDIA_JOB_PRIORITY: Record<StoryMediaJobName, number> = {
   'panel-audio': 1,
   'panel-image': 2,
+  'panel-image-regen': 3,
 };
 
 /**
@@ -52,6 +61,8 @@ export const STORY_MEDIA_JOB_PRIORITY: Record<StoryMediaJobName, number> = {
 export const STORY_MEDIA_CONCURRENCY = 2;
 
 export function storyMediaJobId(gameId: string, name: StoryMediaJobName, order: number): string {
-  const kind = name === 'panel-audio' ? 'audio' : 'image';
+  const kind = { 'panel-audio': 'audio', 'panel-image': 'image', 'panel-image-regen': 'regen' }[
+    name
+  ];
   return `${gameId}__${kind}__${order}`;
 }

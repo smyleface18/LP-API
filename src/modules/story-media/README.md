@@ -2,7 +2,7 @@
 
 Genera la media de cada viñeta de una historieta terminada: la narración con **Amazon Polly** (voz neural, con las marcas de tiempo de cada palabra) y la imagen con el proveedor que indique `IMAGE_PROVIDER` (hoy **Cloudflare Workers AI**, o ninguno). Sube los archivos a S3 (bucket privado); las URLs se firman al enviarlas (`StoryUrlSigner`, en `story-game`), igual para el audio y la imagen.
 
-No sabe nada de la partida: lo usa `StoryMediaProcessor` (cola `story-media`, en `story-game/queue/`), que le pasa el resultado a `StoryGameService.onPanelAudio` u `onPanelImage`. El audio y la imagen de cada viñeta son tareas separadas: la viñeta queda lista con el audio y la imagen llega después. El flujo completo (cuándo se pide, REVIEW, FINISHED y el plazo) está en el README de `story-game`, sección "Fin de la partida y media".
+No sabe nada de la partida ni del historial: lo usa `StoryMediaProcessor` (cola `story-media`, en `story-game/queue/`), que le pasa el resultado a `StoryGameService.onPanelAudio` u `onPanelImage`. La misma cola vuelve a dibujar las imágenes que faltaron en una historieta terminada (`POST /admin/stories/:id/regenerate-images`, ver el README de `story-history`). El audio y la imagen de cada viñeta son tareas separadas: la viñeta queda lista con el audio y la imagen llega después. El flujo completo (cuándo se pide, REVIEW, FINISHED y el plazo) está en el README de `story-game`, sección "Fin de la partida y media".
 
 ## Archivos
 

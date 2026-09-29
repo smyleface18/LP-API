@@ -56,10 +56,13 @@ Cualquier usuario autenticado ve las historietas **publicadas** de todos los jug
 | `GET /admin/stories/:storyId`             | `AdminStoryDetail`: el ítem, el manifiesto completo (también de las quitadas) y `moderationHistory` (acciones, de la más reciente a la más vieja). |
 | `POST /admin/stories/:storyId/remove`     | `{ reason, note? }`: la quita. `note` es obligatoria con `OTHER` (hasta 500). 409 si ya estaba quitada. |
 | `POST /admin/stories/:storyId/restore`    | `{ note? }`: la vuelve a publicar. 409 si ya estaba publicada. |
+| `POST /admin/stories/:storyId/regenerate-images` | Vuelve a dibujar las viñetas con texto que quedaron sin imagen (el proveedor falló o venció el plazo). Responde enseguida `{ queued, orders }`; las imágenes llegan después (ver abajo). |
 
 Cada `AdminStoryItem` trae los jugadores con su cuenta actual (`currentUsername`, `email`) para contactarlos, y `removal: { removedAt, removedBy, reason, note }` si fue quitada.
 
 Motivos (`StoryRemovalReason`): `INAPPROPRIATE_CONTENT`, `OFFENSIVE_LANGUAGE`, `PERSONAL_DATA`, `SPAM`, `OTHER`.
+
+**Regenerar imágenes:** `StoryAdminService.regenerateMissingImages` emite `story.image-regeneration-requested` con una viñeta por imagen faltante (texto final, escenario, fichas del elenco). `StoryMediaQueue` crea una tarea `panel-image-regen` por cada una (id fijo `{gameId}__regen__{order}`: pedirla dos veces mientras está en la cola no la duplica; prioridad más baja que las partidas en curso) y `StoryMediaProcessor` la dibuja con los mismos reintentos. Al terminar emite `story.panel-image-regenerated`: `StoryHistoryService` guarda la key de S3 en `story_panel.imageKey`, y si el review en vivo sigue en Redis `StoryGameService` actualiza la viñeta y la sala recibe `panelMediaReady`. Si vuelve a fallar, la viñeta sigue sin imagen y se puede pedir otra vez.
 
 **Quitar es un borrado lógico:** las keys de S3 se conservan, pero la historieta deja de aparecer en el catálogo y en el historial de sus jugadores; solo el admin la sigue viendo. **Restaurar** la vuelve a publicar y vacía los campos `removed*` de `story` (que son el estado actual). Cada acción se registra en `story_moderation_log` **en la misma transacción** que el cambio de estado, así el historial nunca queda desfasado. El `UPDATE` tiene guarda (solo cambia desde el estado contrario): si dos admins actúan a la vez, uno recibe 409. Si su review en vivo sigue en Redis (24 h), `StoryGameService.discardFinishedStory` borra la partida, para que nadie la siga viendo ni reaccionando por socket.
 
@@ -68,6 +71,7 @@ Motivos (`StoryRemovalReason`): `INAPPROPRIATE_CONTENT`, `OFFENSIVE_LANGUAGE`, `
 - `story-history.mapper.spec.ts`: partida jugada con el harness → filas (estado de la media, ranking) → manifiesto e ítem del historial.
 - `story-history.service.spec.ts`: transacción, idempotencia, reacciones, 404 a no participantes, paginación, catálogo y que las quitadas no se sirvan (base mockeada).
 - `story-admin.service.spec.ts`: lista con filtros y búsqueda escapada, detalle con historial, quitar y restaurar (quién/por qué, historial en la transacción, guarda contra la carrera, 409, 404, Redis caído).
+- Regenerar imágenes: `story-admin.service.spec.ts` (qué viñetas se piden y con qué datos), `story-history.service.spec.ts` (guardar la key), `story-game.media.spec.ts` (review en vivo en Redis) y `queue/story-media.queue.spec.ts` (tarea y processor).
 - `dto/story-admin.dto.spec.ts`: motivo y nota (obligatoria con `OTHER`), filtros del admin y nivel del catálogo.
 - `test/story-game/catalog-smoke.ts`: prueba manual de solo lectura contra el Postgres local (catálogo, búsqueda del admin y detalle).
 - `test/story-game/moderation-smoke.ts`: prueba manual de quitar y restaurar contra el Postgres local, dentro de una transacción que al final se deshace.
