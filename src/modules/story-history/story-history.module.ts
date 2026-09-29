@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { Story, StoryModerationLog, StoryPanel, StoryParticipant } from '@/db/entities';
+import { Story, StoryLike, StoryModerationLog, StoryPanel, StoryParticipant } from '@/db/entities';
 import { StoryGameModule } from '@/modules/story-game/story-game.module';
 import { StoryHistoryService } from './story-history.service';
 import { StoryHistoryController } from './story-history.controller';
@@ -14,7 +14,7 @@ import { StoryAdminService } from './story-admin.service';
  */
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Story, StoryPanel, StoryParticipant, StoryModerationLog]),
+    TypeOrmModule.forFeature([Story, StoryPanel, StoryParticipant, StoryModerationLog, StoryLike]),
     StoryGameModule,
   ],
   controllers: [StoryHistoryController, StoryCatalogController, StoryAdminController],

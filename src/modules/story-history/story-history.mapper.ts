@@ -4,7 +4,7 @@ import { StorySnapshot } from '@/modules/story-game/domain/story-game.types';
 import { closedPanels } from '@/modules/story-game/domain/story-turns';
 import { ReviewManifest, toReviewManifest } from '@/modules/story-game/domain/story-review';
 import { AvatarUrls, MediaUrls } from '@/modules/story-game/domain/story-game.views';
-import { AdminStoryItem, StoryHistoryItem } from './story-history.types';
+import { AdminStoryItem, StoryHistoryItem, StoryLikes } from './story-history.types';
 
 /** Columnas de una entidad, sin las que pone la base ni las relaciones. */
 type Row<T> = Omit<
@@ -140,6 +140,7 @@ export function toHistoryItem(
   userId: string,
   avatars: AvatarUrls = {},
   coverImageUrl: string | null = null,
+  likes: StoryLikes = { count: 0, likedByMe: false },
 ): StoryHistoryItem {
   const participants = [...story.participants].sort(byPosition);
   const me = participants.find((participant) => participant.userId === userId);
@@ -159,6 +160,7 @@ export function toHistoryItem(
     })),
     myPosition: me?.position ?? null,
     myScore: me?.totalScore ?? 0,
+    likes,
   };
 }
 

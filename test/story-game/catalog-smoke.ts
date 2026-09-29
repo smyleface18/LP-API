@@ -70,7 +70,7 @@ async function main() {
         detail.participants.map((p) => [p.username, !!p.email]),
         detail.manifest.panels.length,
       );
-      const fromCatalog = await history.getFromCatalog(first.storyId);
+      const fromCatalog = await history.getFromCatalog(first.storyId, first.participants[0].userId);
       console.log('catalog detail panels', fromCatalog.panels.length);
     }
   } finally {

@@ -2,6 +2,22 @@ import { Level } from '@/db/enum/question.enum';
 import { StoryModerationAction, StoryRemovalReason, StoryVisibility } from '@/db/enum/story.enum';
 import { ReviewManifest } from '@/modules/story-game/domain/story-review';
 
+/** "Me gusta" de una historieta completa. */
+export interface StoryLikes {
+  count: number;
+  /** El usuario que pide ya le dio like. */
+  likedByMe: boolean;
+}
+
+/**
+ * Historieta guardada (`GET /story/history/:storyId` y `GET /story/catalog/:storyId`):
+ * el manifiesto del review, sus likes y las reacciones que se pueden usar.
+ */
+export interface StoredStoryManifest extends ReviewManifest {
+  likes: StoryLikes;
+  reactionOptions: readonly string[];
+}
+
 /** Una historieta en el historial del jugador (`GET /story/history`). */
 export interface StoryHistoryItem {
   storyId: string;
@@ -21,6 +37,7 @@ export interface StoryHistoryItem {
   /** Puesto del jugador que pide (1 = primero). */
   myPosition: number | null;
   myScore: number;
+  likes: StoryLikes;
 }
 
 /** Página del historial o del catálogo. */

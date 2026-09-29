@@ -2,7 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Story, StoryPanel, StoryParticipant } from '@/db/entities';
+import { Story, StoryLike, StoryPanel, StoryParticipant } from '@/db/entities';
 import { Level } from '@/db/enum/question.enum';
 import { StoryVisibility } from '@/db/enum/story.enum';
 import {
@@ -14,10 +14,13 @@ import {
 import { StorySnapshot } from '@/modules/story-game/domain/story-game.types';
 import { ReviewManifest } from '@/modules/story-game/domain/story-review';
 import { StoryUrlSigner } from '@/modules/story-game/story-url-signer.service';
+import { STORY_REACTIONS } from '@/modules/story-game/story-game.config';
 import { AvatarUrls } from '@/modules/story-game/domain/story-game.views';
 import { toHistoryItem, toStoryManifest, toStoryRecords } from './story-history.mapper';
 import { whereStoryMatches } from './story-search';
-import { StoryHistoryPage } from './story-history.types';
+import { StoredStoryManifest, StoryHistoryPage, StoryLikes } from './story-history.types';
+
+const NO_LIKES: StoryLikes = { count: 0, likedByMe: false };
 
 /**
  * Historial del modo Historieta (Fase 4c). Guarda cada historieta al llegar a
@@ -161,19 +164,86 @@ export class StoryHistoryService {
    * Solo para sus participantes, y solo si sigue publicada: a los demás se les
    * responde 404, sin revelar que existe.
    */
-  async get(storyId: string, userId: string): Promise<ReviewManifest> {
+  async get(storyId: string, userId: string): Promise<StoredStoryManifest> {
     const story = await this.findPublished(storyId);
     if (!story || !story.participants.some((participant) => participant.userId === userId)) {
       throw new NotFoundException('Story not found');
     }
-    return this.manifestOf(story);
+    return this.storedManifestOf(story, userId);
   }
 
   /** Manifiesto de una historieta del catálogo (cualquier usuario); 404 si no está publicada. */
-  async getFromCatalog(storyId: string): Promise<ReviewManifest> {
+  async getFromCatalog(storyId: string, userId: string): Promise<StoredStoryManifest> {
     const story = await this.findPublished(storyId);
     if (!story) throw new NotFoundException('Story not found');
-    return this.manifestOf(story);
+    return this.storedManifestOf(story, userId);
+  }
+
+  /**
+   * Reacción del usuario a una viñeta de una historieta publicada (null la
+   * quita). Actualización atómica del jsonb, como en la partida. Devuelve las
+   * reacciones de la viñeta; 404 si no existe o no está publicada.
+   */
+  async react(
+    storyId: string,
+    order: number,
+    userId: string,
+    emoji: string | null,
+  ): Promise<{ order: number; reactions: Record<string, string> }> {
+    const rows = await this.stories.manager.query<{ reactions: Record<string, string> }[]>(
+      `WITH updated AS (
+         UPDATE "story_panel" AS panel SET "reactions" = CASE
+           WHEN $3::text IS NULL THEN panel."reactions" - $2::text
+           ELSE panel."reactions" || jsonb_build_object($2::text, $3::text)
+         END
+         FROM "story" AS story
+         WHERE story."id" = panel."story_id" AND story."id" = $1
+           AND story."visibility" = $5 AND panel."order" = $4
+         RETURNING panel."reactions"
+       )
+       SELECT "reactions" FROM updated`,
+      [storyId, userId, emoji, order, StoryVisibility.PUBLISHED],
+    );
+    if (rows.length === 0) throw new NotFoundException('Panel not found');
+    return { order, reactions: rows[0].reactions };
+  }
+
+  /** Like a una historieta publicada. Idempotente: un segundo like no suma. */
+  async like(storyId: string, userId: string): Promise<StoryLikes> {
+    await this.assertPublished(storyId);
+    await this.stories.manager
+      .createQueryBuilder()
+      .insert()
+      .into(StoryLike)
+      .values({ storyId, userId })
+      .orIgnore()
+      .execute();
+    return this.likesOfOne(storyId, userId);
+  }
+
+  /** Quita el like del usuario (si no había, no cambia nada). */
+  async unlike(storyId: string, userId: string): Promise<StoryLikes> {
+    await this.assertPublished(storyId);
+    await this.stories.manager.delete(StoryLike, { storyId, userId });
+    return this.likesOfOne(storyId, userId);
+  }
+
+  /** Likes de varias historietas en una sola consulta (las que no tienen, no aparecen). */
+  async likesOf(storyIds: string[], userId: string): Promise<Map<string, StoryLikes>> {
+    if (storyIds.length === 0) return new Map();
+    const rows = await this.stories.manager.query<
+      { storyId: string; count: number; likedByMe: boolean }[]
+    >(
+      `SELECT "story_id" AS "storyId", COUNT(*)::int AS "count",
+              BOOL_OR("user_id" = $2::uuid) AS "likedByMe"
+         FROM "story_like"
+        WHERE "story_id" = ANY($1::uuid[])
+        GROUP BY "story_id"`,
+      [storyIds, userId],
+    );
+    return new Map(
+      rows.map((row) => [row.storyId, { count: row.count, likedByMe: row.likedByMe }]),
+    );
   }
 
   /** Historieta con sus viñetas y participantes (y la cuenta y el avatar actual de cada uno). */
@@ -219,6 +289,25 @@ export class StoryHistoryService {
     return imageUrl;
   }
 
+  private async storedManifestOf(story: Story, userId: string): Promise<StoredStoryManifest> {
+    const [manifest, likes] = await Promise.all([
+      this.manifestOf(story),
+      this.likesOfOne(story.id, userId),
+    ]);
+    return { ...manifest, likes, reactionOptions: STORY_REACTIONS };
+  }
+
+  private async likesOfOne(storyId: string, userId: string): Promise<StoryLikes> {
+    return (await this.likesOf([storyId], userId)).get(storyId) ?? NO_LIKES;
+  }
+
+  private async assertPublished(storyId: string): Promise<void> {
+    const published = await this.stories.exists({
+      where: { id: storyId, visibility: StoryVisibility.PUBLISHED },
+    });
+    if (!published) throw new NotFoundException('Story not found');
+  }
+
   private findPublished(storyId: string): Promise<Story | null> {
     return this.detailsQuery()
       .where('story.id = :storyId', { storyId })
@@ -226,14 +315,18 @@ export class StoryHistoryService {
       .getOne();
   }
 
-  private toItems(stories: Story[], userId: string) {
+  private async toItems(stories: Story[], userId: string) {
+    const likes = await this.likesOf(
+      stories.map((story) => story.id),
+      userId,
+    );
     return Promise.all(
       stories.map(async (story) => {
         const [avatars, coverUrl] = await Promise.all([
           this.avatarsOf(story),
           this.coverUrlOf(story),
         ]);
-        return toHistoryItem(story, userId, avatars, coverUrl);
+        return toHistoryItem(story, userId, avatars, coverUrl, likes.get(story.id) ?? NO_LIKES);
       }),
     );
   }

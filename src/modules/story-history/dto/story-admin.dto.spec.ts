@@ -1,6 +1,7 @@
 import { ArgumentMetadata, BadRequestException, ValidationPipe } from '@nestjs/common';
 import { AdminStoriesQueryDto, RemoveStoryDto, RestoreStoryDto } from './story-admin.dto';
 import { StoryCatalogQueryDto } from './story-catalog-query.dto';
+import { PanelReactionDto } from './story-reaction.dto';
 
 // Mismas opciones que el ValidationPipe global de main.ts.
 const pipe = new ValidationPipe({
@@ -82,6 +83,19 @@ describe('story admin DTOs', () => {
       await expect(validate(value, StoryCatalogQueryDto, 'query')).rejects.toBeInstanceOf(
         BadRequestException,
       );
+    });
+  });
+
+  describe('PanelReactionDto', () => {
+    it('accepts an allowed reaction, or null to remove it', async () => {
+      await expect(validate({ emoji: '🔥' }, PanelReactionDto)).resolves.toEqual({ emoji: '🔥' });
+      await expect(validate({ emoji: null }, PanelReactionDto)).resolves.toEqual({ emoji: null });
+    });
+
+    it('rejects any other emoji, a missing one and extra fields', async () => {
+      for (const body of [{ emoji: '💩' }, {}, { emoji: '🔥', userId: 'someone' }]) {
+        await expect(validate(body, PanelReactionDto)).rejects.toBeInstanceOf(BadRequestException);
+      }
     });
   });
 });

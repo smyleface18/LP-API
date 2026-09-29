@@ -1,6 +1,6 @@
 import { NotFoundException } from '@nestjs/common';
 import { Repository } from 'typeorm';
-import { Story, StoryPanel, StoryParticipant } from '@/db/entities';
+import { Story, StoryLike, StoryPanel, StoryParticipant } from '@/db/entities';
 import { StorySnapshot } from '@/modules/story-game/domain/story-game.types';
 import { StoryUrlSigner } from '@/modules/story-game/story-url-signer.service';
 import { StoryHistoryService } from './story-history.service';
@@ -75,7 +75,11 @@ describe('StoryHistoryService', () => {
     transaction: jest.Mock;
     query: jest.Mock;
     update: jest.Mock;
+    delete: jest.Mock;
+    createQueryBuilder: jest.Mock;
   };
+  let insertBuilder: Record<string, jest.Mock>;
+  let stories: { manager: typeof manager; createQueryBuilder: jest.Mock; exists: jest.Mock };
   let queryBuilder: Record<string, jest.Mock>;
   let urls: { avatarsFor: jest.Mock; mediaFor: jest.Mock; signMedia: jest.Mock };
   let service: StoryHistoryService;
@@ -85,9 +89,17 @@ describe('StoryHistoryService', () => {
       exists: jest.fn().mockResolvedValue(false),
       insert: jest.fn().mockResolvedValue(undefined),
       transaction: jest.fn(),
-      query: jest.fn().mockResolvedValue(undefined),
+      query: jest.fn().mockResolvedValue([]),
       update: jest.fn().mockResolvedValue(undefined),
+      delete: jest.fn().mockResolvedValue(undefined),
+      createQueryBuilder: jest.fn(),
     };
+    insertBuilder = {};
+    for (const method of ['insert', 'into', 'values', 'orIgnore']) {
+      insertBuilder[method] = jest.fn(() => insertBuilder);
+    }
+    insertBuilder.execute = jest.fn().mockResolvedValue(undefined);
+    manager.createQueryBuilder.mockReturnValue(insertBuilder);
     manager.transaction.mockImplementation((fn: (m: typeof manager) => unknown) => fn(manager));
     queryBuilder = {};
     for (const method of [
@@ -103,7 +115,11 @@ describe('StoryHistoryService', () => {
     }
     queryBuilder.getOne = jest.fn();
     queryBuilder.getManyAndCount = jest.fn();
-    const stories = { manager, createQueryBuilder: jest.fn(() => queryBuilder) };
+    stories = {
+      manager,
+      createQueryBuilder: jest.fn(() => queryBuilder),
+      exists: jest.fn().mockResolvedValue(true),
+    };
     urls = {
       avatarsFor: jest.fn().mockResolvedValue({}),
       mediaFor: jest
@@ -294,13 +310,18 @@ describe('StoryHistoryService', () => {
       expect(queryBuilder.andWhere).not.toHaveBeenCalled();
     });
 
-    it('serves a published story to anyone, and 404 otherwise', async () => {
+    it('serves a published story to anyone, with its likes, and 404 otherwise', async () => {
       queryBuilder.getOne.mockResolvedValue(storedStory());
-      const manifest = await service.getFromCatalog('story-1');
+      manager.query.mockResolvedValue([{ storyId: 'story-1', count: 3, likedByMe: true }]);
+      const manifest = await service.getFromCatalog('story-1', 'mallory');
       expect(manifest.panels[0].audioUrl).toBe('https://signed/a.mp3');
+      expect(manifest.likes).toEqual({ count: 3, likedByMe: true });
+      expect(manifest.reactionOptions).toContain('👏');
 
       queryBuilder.getOne.mockResolvedValue(null);
-      await expect(service.getFromCatalog('story-1')).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.getFromCatalog('story-1', 'mallory')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 
@@ -324,6 +345,55 @@ describe('StoryHistoryService', () => {
       storyId: 'story-1',
       coverImageUrl: 'https://signed/cover.png',
       myPosition: 1,
+    });
+  });
+
+  describe('reactions and likes on saved stories', () => {
+    it('saves a reaction on a panel of a published story and returns its reactions', async () => {
+      manager.query.mockResolvedValue([{ reactions: { alice: '🔥', bob: '👏' } }]);
+      expect(await service.react('story-1', 2, 'bob', '👏')).toEqual({
+        order: 2,
+        reactions: { alice: '🔥', bob: '👏' },
+      });
+      const [sql, params] = manager.query.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain('"visibility" = $5');
+      expect(params).toEqual(['story-1', 'bob', '👏', 2, 'PUBLISHED']);
+    });
+
+    it('answers 404 when the panel does not exist or the story is not published', async () => {
+      manager.query.mockResolvedValue([]);
+      await expect(service.react('story-1', 9, 'bob', null)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+    });
+
+    it('likes a story once (repeated likes are ignored) and returns the count', async () => {
+      manager.query.mockResolvedValue([{ storyId: 'story-1', count: 1, likedByMe: true }]);
+      expect(await service.like('story-1', 'bob')).toEqual({ count: 1, likedByMe: true });
+      expect(insertBuilder.into).toHaveBeenCalledWith(StoryLike);
+      expect(insertBuilder.values).toHaveBeenCalledWith({ storyId: 'story-1', userId: 'bob' });
+      expect(insertBuilder.orIgnore).toHaveBeenCalled();
+    });
+
+    it('removes the like of the user', async () => {
+      expect(await service.unlike('story-1', 'bob')).toEqual({ count: 0, likedByMe: false });
+      expect(manager.delete).toHaveBeenCalledWith(StoryLike, { storyId: 'story-1', userId: 'bob' });
+    });
+
+    it('does not like or unlike a story that is not published', async () => {
+      stories.exists.mockResolvedValue(false);
+      await expect(service.like('story-1', 'bob')).rejects.toBeInstanceOf(NotFoundException);
+      await expect(service.unlike('story-1', 'bob')).rejects.toBeInstanceOf(NotFoundException);
+      expect(insertBuilder.execute).not.toHaveBeenCalled();
+      expect(manager.delete).not.toHaveBeenCalled();
+    });
+
+    it('adds the likes to each item of a list, with one query for the page', async () => {
+      queryBuilder.getManyAndCount.mockResolvedValue([[storedStory()], 1]);
+      manager.query.mockResolvedValue([{ storyId: 'story-1', count: 2, likedByMe: false }]);
+      const page = await service.listCatalog('mallory', 1, 20);
+      expect(page.items[0].likes).toEqual({ count: 2, likedByMe: false });
+      expect(manager.query).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -50,7 +50,7 @@ async function main() {
       'smoke test',
     );
     console.log('after remove:', removed.visibility, removed.removal);
-    const hidden = await history.getFromCatalog(target.id).then(
+    const hidden = await history.getFromCatalog(target.id, adminUser.id).then(
       () => 'visible (BAD)',
       () => 'hidden from the catalog',
     );
@@ -62,7 +62,7 @@ async function main() {
       'history:',
       restored.moderationHistory.map((e) => [e.action, e.reason, e.note, e.admin?.userId]),
     );
-    await history.getFromCatalog(target.id);
+    await history.getFromCatalog(target.id, adminUser.id);
     console.log('back in the catalog');
   } finally {
     await runner.rollbackTransaction();
