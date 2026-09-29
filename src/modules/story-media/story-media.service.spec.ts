@@ -129,15 +129,23 @@ describe('StoryMediaService', () => {
       expect(images.generate).toHaveBeenCalledTimes(3);
     });
 
-    it('gives up after 3 attempts on transient errors', async () => {
+    it('tries 5 times on transient errors, waiting 1, 2, 4 and 8 s in between', async () => {
       jest.useFakeTimers();
-      images.generate.mockRejectedValue(new ImageGenerationError('500', 'transient'));
+      images.generate.mockRejectedValue(new ImageGenerationError('timed out', 'transient'));
 
       const pending = service.generateImage(request);
-      await jest.runAllTimersAsync();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(images.generate).toHaveBeenCalledTimes(1);
+      for (const [index, delay] of IMAGE_RETRY_DELAYS_MS.entries()) {
+        await jest.advanceTimersByTimeAsync(delay - 1);
+        expect(images.generate).toHaveBeenCalledTimes(index + 1);
+        await jest.advanceTimersByTimeAsync(1);
+        expect(images.generate).toHaveBeenCalledTimes(index + 2);
+      }
 
       expect(await pending).toEqual({ imageStatus: 'failed', imageKey: null, rateLimited: false });
-      expect(images.generate).toHaveBeenCalledTimes(3);
+      expect(images.generate).toHaveBeenCalledTimes(5);
+      expect(IMAGE_RETRY_DELAYS_MS).toEqual([1_000, 2_000, 4_000, 8_000]);
     });
 
     it('treats an unknown error as transient', async () => {

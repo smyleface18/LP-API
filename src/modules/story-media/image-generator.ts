@@ -7,7 +7,7 @@ import { GeneratedImage, PanelImageInput } from './story-media.types';
  *   otro 4xx, o una respuesta sin imagen). Sin reintento.
  * - `rate-limited`: se superó la cuota (429). Sin reintento, y las viñetas que
  *   falten de la historieta no llaman al proveedor.
- * - `transient`: 5xx, timeout o error de red. Hasta 3 intentos.
+ * - `transient`: 5xx, timeout o error de red. Hasta 5 intentos.
  */
 export type ImageFailureKind = 'permanent' | 'rate-limited' | 'transient';
 

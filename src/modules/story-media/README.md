@@ -36,11 +36,11 @@ Keys de S3: `story/{storyId}/panel-{order}.mp3` y `.jpg` o `.png` según el tipo
   | ---------------------------------------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------- |
   | 400, 401, 403 (y otro 4xx), respuesta sin imagen o formato desconocido | `permanent`    | Sin reintento: `imageStatus: 'failed'`.                                                             |
   | 429                                                                    | `rate-limited` | Sin reintento, y las imágenes que falten de esa historieta quedan `failed` sin llamar al proveedor. |
-  | 5xx, timeout o error de red (y cualquier error sin `kind`)             | `transient`    | Hasta 3 intentos, esperando `IMAGE_RETRY_DELAYS_MS` (1 s y 2 s).                                    |
+  | 5xx, timeout o error de red (y cualquier error sin `kind`)             | `transient`    | Hasta 5 intentos, esperando `IMAGE_RETRY_DELAYS_MS` (1, 2, 4 y 8 s).                                    |
 
   Si la imagen falla, el review sigue con el audio. El audio es otra tarea y no se reintenta.
 
-- Timeouts: `SPEECH_TIMEOUT_MS` (15 s) e `IMAGE_TIMEOUT_MS` (por intento; por defecto 20 s, `DEFAULT_IMAGE_TIMEOUT_MS`). El plazo de toda la historieta (`MEDIA_DEADLINE_MS`, 3 min) está en `story-game`: el audio o la imagen que sigan pendientes al vencer quedan `failed`, pero un audio ya generado se conserva.
+- Timeouts: `SPEECH_TIMEOUT_MS` (15 s) e `IMAGE_TIMEOUT_MS` (por intento; por defecto 30 s, `DEFAULT_IMAGE_TIMEOUT_MS`; con 5 intentos una imagen puede tardar hasta ~2 min 45 s). El plazo de toda la historieta (`MEDIA_DEADLINE_MS`, 3 min) está en `story-game`: el audio o la imagen que sigan pendientes al vencer quedan `failed`, pero un audio ya generado se conserva.
 
 ## Configuración
 
@@ -52,7 +52,7 @@ Keys de S3: `story/{storyId}/panel-{order}.mp3` y `.jpg` o `.png` según el tipo
 | `CF_ACCOUNT_ID`    | Id de la cuenta de Cloudflare. Obligatoria con `cloudflare`.                                                                           |
 | `CF_API_TOKEN`     | Token de la API con permiso de Workers AI. Obligatoria con `cloudflare`.                                                               |
 | `CF_IMAGE_MODEL`   | Modelo de Workers AI. Por defecto `@cf/black-forest-labs/flux-1-schnell`.                                                              |
-| `IMAGE_TIMEOUT_MS` | Tiempo máximo de cada intento de dibujar una viñeta, en ms. Por defecto 20000. Un valor que no sea entero positivo: la app no arranca. |
+| `IMAGE_TIMEOUT_MS` | Tiempo máximo de cada intento de dibujar una viñeta, en ms. Por defecto 30000. Un valor que no sea entero positivo: la app no arranca. |
 
 Con `IMAGE_PROVIDER=cloudflare` y sin `CF_ACCOUNT_ID` o `CF_API_TOKEN`, la app no arranca y el error dice qué variable falta.
 
@@ -82,7 +82,7 @@ Revisados contra la documentación oficial (página del modelo `flux-1-schnell` 
 
 ## Pruebas
 
-- `story-media.service.spec.ts`: audio e imagen por separado, keys de S3 (`.png`/`.jpg`), semilla por partida, `imageStatus` (`ready`, `none`, `failed`), reintentos según el error (`transient` con backoff hasta 3 intentos, `permanent` y 429 sin reintento, `rateLimited`) y errores de S3.
+- `story-media.service.spec.ts`: audio e imagen por separado, keys de S3 (`.png`/`.jpg`), semilla por partida, `imageStatus` (`ready`, `none`, `failed`), reintentos según el error (`transient` con backoff hasta 5 intentos, `permanent` y 429 sin reintento, `rateLimited`) y errores de S3.
 - `cloudflare-image.generator.spec.ts` (`fetch` mockeado): petición (URL, token, solo `prompt` y `steps`), imagen JPEG y PNG, `kind` de cada error HTTP (400/401/403/404, 429, 5xx, con y sin JSON), respuesta sin imagen o con formato desconocido, error de red y timeout.
 - `image-generator.factory.spec.ts`: `none` por defecto, `cloudflare` con el modelo por defecto o `CF_IMAGE_MODEL`, `IMAGE_TIMEOUT_MS` (por defecto e inválido), variables faltantes y proveedor desconocido.
 - `polly-speech.service.spec.ts`: las dos llamadas a Polly (voz neural, mp3 y speech marks) y el `null` si falla.

@@ -2,14 +2,16 @@
 export const SPEECH_TIMEOUT_MS = 15_000;
 
 /** Tiempo máximo de cada intento de dibujar una viñeta. Se cambia con `IMAGE_TIMEOUT_MS`. */
-export const DEFAULT_IMAGE_TIMEOUT_MS = 20_000;
+export const DEFAULT_IMAGE_TIMEOUT_MS = 30_000;
 
 /**
  * Esperas entre intentos de dibujar una viñeta tras un error `transient`
- * (backoff exponencial): hasta 3 intentos. Si fallan todos, la viñeta queda
- * con `imageStatus: 'failed'` y el review sigue con el audio.
+ * (backoff exponencial): hasta 5 intentos. Si fallan todos, la viñeta queda
+ * con `imageStatus: 'failed'` y el review sigue con el audio. Workers AI a
+ * veces tarda más de lo normal durante un rato: con 5 intentos de 30 s una
+ * imagen puede esperar hasta ~2 min 45 s (5 × 30 s + 15 s de esperas).
  */
-export const IMAGE_RETRY_DELAYS_MS = [1_000, 2_000] as const;
+export const IMAGE_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000] as const;
 
 /** Largo máximo del prompt de la imagen (FLUX.1 schnell acepta hasta 2048). */
 export const IMAGE_PROMPT_MAX_CHARS = 1024;

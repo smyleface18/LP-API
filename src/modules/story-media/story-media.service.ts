@@ -91,7 +91,7 @@ export class StoryMediaService {
 
   /**
    * Dibuja la viñeta según el tipo de error: `transient` se reintenta tras
-   * cada espera de IMAGE_RETRY_DELAYS_MS (hasta 3 intentos); `permanent` y
+   * cada espera de IMAGE_RETRY_DELAYS_MS (hasta 5 intentos); `permanent` y
    * `rate-limited` no se reintentan. `null` = no hay proveedor.
    */
   private async drawWithRetries(

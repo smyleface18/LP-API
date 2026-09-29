@@ -58,8 +58,8 @@ describe('createImageGenerator', () => {
   const timeoutOf = (generator: unknown) =>
     (generator as { config: { timeoutMs: number } }).config.timeoutMs;
 
-  it('times out after 20 s by default, or after IMAGE_TIMEOUT_MS', () => {
-    expect(timeoutOf(createImageGenerator(envsWith(CLOUDFLARE)))).toBe(20_000);
+  it('times out after 30 s by default, or after IMAGE_TIMEOUT_MS', () => {
+    expect(timeoutOf(createImageGenerator(envsWith(CLOUDFLARE)))).toBe(30_000);
     expect(
       timeoutOf(createImageGenerator(envsWith({ ...CLOUDFLARE, IMAGE_TIMEOUT_MS: '8000' }))),
     ).toBe(8_000);
