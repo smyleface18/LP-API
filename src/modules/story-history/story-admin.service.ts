@@ -112,7 +112,7 @@ export class StoryAdminService {
 
     this.logger.warn(`story ${storyId} (game ${story.gameId}) removed by ${adminId}: ${reason}`);
     await this.game.discardFinishedStory(story.gameId).catch((error: Error) =>
-      // La historieta ya está quitada en Postgres; Redis vence solo en 24 h.
+      // La historieta ya está quitada en Postgres; Redis vence solo en 1 h.
       this.logger.error(`story ${story.gameId}: could not discard it from Redis: ${error.message}`),
     );
     return this.get(storyId);

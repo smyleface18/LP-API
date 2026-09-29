@@ -35,7 +35,7 @@ Solo el servidor cambia el estado. Un evento que no corresponde al estado actual
 
 ## Estado en Redis
 
-TTL: `MATCH_TTL` (se renueva en cada escritura). Una partida FINISHED usa `FINISHED_STORY_TTL_MS` (24 h), también en las escrituras posteriores (reacciones), para servir el review en vivo por socket; después solo queda en Postgres (`GET /story/history/:storyId`). Todas las claves de una partida comparten el hash tag `{gameId}`.
+TTL: `MATCH_TTL` (se renueva en cada escritura). Una partida FINISHED usa `FINISHED_STORY_TTL_MS` (1 h), también en las escrituras posteriores (reacciones), para servir el review en vivo por socket; después solo queda en Postgres (`GET /story/history/:storyId`). Todas las claves de una partida comparten el hash tag `{gameId}`.
 
 ```text
 story:{gameId}              hash: status, hostId, config (json), players (json, en orden de entrada, con avatarKey),
@@ -58,7 +58,7 @@ El elenco solo crece: los personajes son inmutables una vez agregados, porque ot
 
 ## Avatares y media (URLs firmadas)
 
-Cada jugador guarda en Redis la **key** de S3 de su avatar (`avatarKey`, tomada del `User` al crear, unirse o reconectarse con `joinStoryGame`), y cada viñeta las keys de su audio e imagen (`media.audioKey`, `media.imageKey`); nunca las URLs: las URLs firmadas vencen y una partida terminada vive 24 h. `StoryUrlSigner` firma las keys al enviar cada vista: `avatarsFor(players)` devuelve `userId → URL` y `mediaFor(panels)` `order → { audioUrl, imageUrl }`. Una key que no se puede firmar sale `null`, lo que nunca frena la partida.
+Cada jugador guarda en Redis la **key** de S3 de su avatar (`avatarKey`, tomada del `User` al crear, unirse o reconectarse con `joinStoryGame`), y cada viñeta las keys de su audio e imagen (`media.audioKey`, `media.imageKey`); nunca las URLs: las URLs firmadas vencen y una partida terminada vive 1 h. `StoryUrlSigner` firma las keys al enviar cada vista: `avatarsFor(players)` devuelve `userId → URL` y `mediaFor(panels)` `order → { audioUrl, imageUrl }`. Una key que no se puede firmar sale `null`, lo que nunca frena la partida.
 
 Cada URL dura `SIGNED_URL_TTL_SEC` (2 h) y se reutiliza mientras le quede al menos `SIGNED_URL_MIN_REMAINING_MS` (30 min): así el cliente no recarga la imagen o el audio en cada evento. La caché es por instancia. En el review, el cliente puede volver a pedir `getReviewManifest` para URLs nuevas.
 
@@ -140,7 +140,7 @@ Al cerrarse la última viñeta (o al quedar menos de 2 jugadores), la partida pa
 3. `onPanelAudio` guarda el audio solo si sigue `pending` (el primer resultado gana): con audio la viñeta queda `ready` aunque su imagen siga pendiente. `onPanelImage` guarda la imagen solo si su `imageStatus` sigue `pending`; si el resultado viene con `rateLimited` (el proveedor respondió 429), las demás imágenes pendientes de la historieta quedan `failed` sin llamar al proveedor. Cada cambio emite `story.panel-media-ready` (la imagen llega en un segundo `panelMediaReady`) y el avance (`story.processing`, que cuenta las viñetas con audio e imagen terminados).
 4. `advanceAfterMedia`, después de cada resultado:
    - PROCESSING → REVIEW (`enterReview`) cuando no falta **nada** (audios, imágenes y título), para que el review aparezca completo; o, si vence la espera (`review-wait`), en cuanto el **audio** de la primera viñeta ya no está pendiente. Emite `lobbyUpdated` y `storyReviewReady` con el manifiesto a la sala, y libera `user:{userId}:story` de todos los jugadores (solo si todavía apunta a esta partida). Desde ahí pueden crear o unirse a otra partida sin `ALREADY_IN_GAME`. Las viñetas que faltan le llegan a la sala por `panelMediaReady`.
-   - REVIEW → FINISHED (`finishStory`) cuando no queda **nada** pendiente: ni audio, ni imagen, ni el título. TTL de 24 h y evento `story.finished`, con el que `StoryHistoryService` la guarda en Postgres (Fase 4c).
+   - REVIEW → FINISHED (`finishStory`) cuando no queda **nada** pendiente: ni audio, ni imagen, ni el título. TTL de 1 h y evento `story.finished`, con el que `StoryHistoryService` la guarda en Postgres (Fase 4c).
 5. Si vence el plazo (`media-deadline`), el audio o la imagen que sigan pendientes quedan `failed` y la partida avanza igual; un audio ya generado nunca se descarta: una cola caída, una tarea perdida o AWS sin responder nunca dejan una partida en PROCESSING.
 
 Una viñeta es `ready` si tiene audio y `failed` si no. La imagen va aparte, en `media.imageStatus` (`none` sin proveedor de imágenes o sin texto, `pending`, `ready` o `failed` si el proveedor falló en todos los intentos o venció el plazo); sin imagen, la viñeta se lee igual. Sin ninguna viñeta con texto no se pide nada y la partida pasa directo a FINISHED. Las transiciones son idempotentes (solo actúan desde el estado anterior).
@@ -271,7 +271,7 @@ El servidor sigue validando todo; las reglas son para que la interfaz no deje ar
 - `story-game.turns.spec.ts`: turnos, borradores, personajes, confirmación, timeout (incluido el cierre exactamente una vez, con y sin lock, y el cierre diferido por una revisión en curso), reasignación y fin anticipado.
 - `domain/story-score.spec.ts`: `calculatePanelScore` (primer intento perfecto, autocorrección, timeout, sin texto, IA caída).
 - `story-game.sharing.spec.ts`: `authorStatus`, `panelDraftReviewed` (sin texto corregido, no `flagged`, `shareDrafts: false`) y reacciones.
-- `story-game.review.spec.ts`: fin de la partida: última viñeta → `storyReviewReady` → FINISHED, manifiesto, ranking por promedio, jugadores liberados al entrar a REVIEW, TTL de 24 h, `getReviewManifest` y `scoreboard`.
+- `story-game.review.spec.ts`: fin de la partida: última viñeta → `storyReviewReady` → FINISHED, manifiesto, ranking por promedio, jugadores liberados al entrar a REVIEW, TTL de 1 h, `getReviewManifest` y `scoreboard`.
 - `story-game.media.spec.ts`: media: `storyId`, viñetas `pending`/`none`, REVIEW con la primera viñeta, FINISHED con la última, resultados tardíos descartados, plazo vencido y partida sin texto.
 - `story-game.timers.spec.ts`: una tarea de la cola llega hasta `server.to(gameId).emit` (módulo de Nest real con `EventEmitterModule`), y PROCESSING → REVIEW → FINISHED con un worker de media falso.
 - `test/story-game/story-harness.ts`: Redis en memoria (emula el script Lua con guarda), reloj controlado y dependencias falsas, compartido por los dos specs anteriores.

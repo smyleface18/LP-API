@@ -765,7 +765,7 @@ export class StoryGameService {
 
   /**
    * Una imagen regenerada por un admin: si la partida terminada sigue en Redis
-   * (review en vivo, 24 h), se guarda en su viñeta y la sala la recibe por
+   * (review en vivo, 1 h), se guarda en su viñeta y la sala la recibe por
    * `panelMediaReady`. Si ya no está, no hace nada (el historial la guarda).
    */
   @OnEvent(STORY_EVENTS.panelImageRegenerated, { async: true, promisify: true })
@@ -792,7 +792,7 @@ export class StoryGameService {
 
   /**
    * Un admin quitó la historieta (moderación): si la partida terminada sigue en
-   * Redis (review en vivo, 24 h), se borra para que nadie la siga viendo ni
+   * Redis (review en vivo, 1 h), se borra para que nadie la siga viendo ni
    * reaccionando por socket. Las partidas en curso no se tocan.
    */
   async discardFinishedStory(gameId: string): Promise<void> {

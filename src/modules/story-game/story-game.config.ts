@@ -42,11 +42,12 @@ export const STORY_DEFAULT_CONFIG = {
 export const IDLE_ABANDON_DELAY_MS = 60_000;
 
 /**
- * TTL en Redis de una partida FINISHED, para que el manifiesto se pueda
- * consultar (getReviewManifest) hasta que exista la persistencia (Fase 4c).
+ * TTL en Redis de una partida FINISHED: lo que dura el review en vivo por
+ * socket (getReviewManifest, reacciones). La historieta ya está en Postgres,
+ * así que después se sigue viendo desde el historial y el catálogo.
  * Las partidas en curso usan MATCH_TTL.
  */
-export const FINISHED_STORY_TTL_MS = 24 * 60 * 60 * 1000;
+export const FINISHED_STORY_TTL_MS = 60 * 60 * 1000;
 
 /**
  * URLs firmadas (avatares y media de las viñetas): duran 2 h y se reutilizan

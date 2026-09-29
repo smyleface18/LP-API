@@ -25,7 +25,7 @@ const NO_LIKES: StoryLikes = { count: 0, likedByMe: false };
 /**
  * Historial del modo Historieta (Fase 4c). Guarda cada historieta al llegar a
  * FINISHED (con la media ya terminada) y la sirve a sus participantes. Redis
- * la sigue teniendo 24 h para el review en vivo; después solo existe acá.
+ * la sigue teniendo 1 h para el review en vivo; después solo existe acá.
  */
 @Injectable()
 export class StoryHistoryService {
@@ -36,7 +36,7 @@ export class StoryHistoryService {
     private readonly urls: StoryUrlSigner,
   ) {}
 
-  /** Un error al guardar no afecta a la partida: queda en el log (y en Redis 24 h). */
+  /** Un error al guardar no afecta a la partida: queda en el log (y en Redis 1 h). */
   @OnEvent(STORY_EVENTS.finished, { async: true, promisify: true })
   async onStoryFinished({ snapshot }: StoryFinishedEvent): Promise<void> {
     try {
